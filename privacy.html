@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>개인정보처리방침 — 나의 레슨일지</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, 'Noto Sans KR', sans-serif;
+      background: #f7f7fb;
+      color: #1f2937;
+      line-height: 1.8;
+    }
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+    .header .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    .header h1 {
+      font-size: 26px;
+      font-weight: 900;
+      color: #1f2937;
+      margin-bottom: 8px;
+    }
+    .header p {
+      font-size: 14px;
+      color: #6b7280;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      border: 1.5px solid #f0f0f5;
+      padding: 28px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    h2 {
+      font-size: 16px;
+      font-weight: 800;
+      color: #6366f1;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1.5px solid #f0f0f5;
+    }
+    p { font-size: 14px; color: #374151; margin-bottom: 10px; }
+    ul { padding-left: 20px; margin-bottom: 10px; }
+    li { font-size: 14px; color: #374151; margin-bottom: 6px; }
+    .highlight {
+      background: #f0f9ff;
+      border-left: 4px solid #6366f1;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      font-size: 14px;
+      color: #0c4a6e;
+    }
+    .contact {
+      background: #f5f3ff;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+    }
+    .contact p { margin-bottom: 4px; }
+    .contact a { color: #6366f1; font-weight: 700; text-decoration: none; }
+    .footer {
+      text-align: center;
+      margin-top: 40px;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+    .badge {
+      display: inline-block;
+      background: #eef2ff;
+      color: #6366f1;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 20px;
+      margin-right: 6px;
+      margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <div class="header">
+      <div class="icon">📒</div>
+      <h1>개인정보처리방침</h1>
+      <p>나의 레슨일지 (My Lesson Diary)</p>
+      <p style="margin-top:6px;">최종 수정일: 2026년 3월 10일</p>
+    </div>
+
+    <div class="card">
+      <h2>1. 기본 원칙</h2>
+      <div class="highlight">
+        나의 레슨일지는 사용자의 데이터를 앱 운영자의 서버에 저장하지 않습니다.<br>
+        모든 데이터는 사용자 본인의 기기(브라우저) 또는 사용자 본인의 Google 계정에만 저장됩니다.
+      </div>
+      <p>본 방침은 나의 레슨일지(이하 "앱")가 수집하는 정보와 그 사용 방식을 설명합니다.</p>
+    </div>
+
+    <div class="card">
+      <h2>2. 수집하는 정보</h2>
+      <p>앱은 다음 정보를 처리합니다:</p>
+      <ul>
+        <li><strong>학생 정보</strong> — 이름, 학교, 학년, 연락처, 전공, 수업 일정 등 사용자가 직접 입력한 정보</li>
+        <li><strong>수업 기록</strong> — 수업 날짜, 내용, 숙제, 수업료 납부 여부 등 사용자가 직접 입력한 정보</li>
+        <li><strong>Google 계정 정보</strong> — Google 로그인 시 이름과 이메일 주소 (Google Drive 연동 목적)</li>
+      </ul>
+      <p>앱은 위 정보 외에 어떠한 개인정보도 수집하지 않습니다.</p>
+    </div>
+
+    <div class="card">
+      <h2>3. 정보의 저장 위치</h2>
+      <ul>
+        <li><strong>Google 미연동 시</strong> — 모든 데이터는 사용자 기기의 브라우저 로컬 저장소(localStorage)에만 저장됩니다. 앱 운영자는 이 데이터에 접근할 수 없습니다.</li>
+        <li><strong>Google Drive 연동 시</strong> — 데이터는 사용자 본인의 Google Drive 앱 전용 폴더(appDataFolder)에 저장됩니다. 앱 운영자는 이 데이터에 접근할 수 없습니다.</li>
+        <li><strong>Google Calendar 연동 시</strong> — 수업 기록이 사용자 본인의 Google 캘린더에 이벤트로 등록됩니다. 앱 운영자는 이 데이터에 접근할 수 없습니다.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>4. Google API 사용</h2>
+      <p>앱은 다음 Google API를 사용합니다:</p>
+      <span class="badge">Google Drive API</span>
+      <span class="badge">Google Calendar API</span>
+      <span class="badge">Google OAuth 2.0</span>
+      <p style="margin-top:12px;">Google 로그인은 선택 사항이며, 로그인하지 않아도 앱의 모든 기능을 사용할 수 있습니다.</p>
+      <p>Google API를 통해 수집된 정보는 앱의 핵심 기능(데이터 동기화, 캘린더 등록) 제공 목적으로만 사용되며, 제3자와 공유하거나 광고 목적으로 사용하지 않습니다.</p>
+      <p>본 앱의 Google API 사용은 <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" style="color:#6366f1;font-weight:700;">Google API 서비스 사용자 데이터 정책</a>을 준수합니다.</p>
+    </div>
+
+    <div class="card">
+      <h2>5. 제3자 공유</h2>
+      <p>앱은 사용자의 데이터를 어떠한 제3자에게도 판매, 공유, 또는 제공하지 않습니다.</p>
+    </div>
+
+    <div class="card">
+      <h2>6. 데이터 보관 및 삭제</h2>
+      <ul>
+        <li>로컬 데이터는 사용자가 브라우저 데이터를 초기화하면 삭제됩니다.</li>
+        <li>Google Drive 데이터는 사용자가 직접 Google Drive에서 삭제할 수 있습니다.</li>
+        <li>Google Calendar 이벤트는 앱에서 수업 기록 삭제 시 함께 삭제되거나, 사용자가 Google 캘린더에서 직접 삭제할 수 있습니다.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>7. 쿠키 및 추적</h2>
+      <p>앱은 쿠키를 사용하지 않으며, 사용자 행동을 추적하거나 분석하는 도구를 사용하지 않습니다.</p>
+    </div>
+
+    <div class="card">
+      <h2>8. 방침 변경</h2>
+      <p>개인정보처리방침이 변경될 경우 이 페이지에 업데이트됩니다. 중요한 변경이 있을 경우 앱 내 공지를 통해 안내합니다.</p>
+    </div>
+
+    <div class="card">
+      <h2>9. 문의</h2>
+      <div class="contact">
+        <p style="font-weight:800;font-size:15px;margin-bottom:10px;">개인정보 관련 문의</p>
+        <p>운영자: 임호</p>
+        <p>이메일: <a href="mailto:limfrog75@gmail.com">limfrog75@gmail.com</a></p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>© 2026 나의 레슨일지 · <a href="https://limfrog.github.io/mylesson/" style="color:#6366f1;">앱으로 돌아가기</a></p>
+    </div>
+
+  </div>
+</body>
+</html>
