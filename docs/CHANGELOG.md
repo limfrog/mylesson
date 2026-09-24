@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.3 — 2026-09-25
+- Prevent duplicate student saves and duplicate Google Calendar event creation with synchronous in-flight locks.
+- Student save button is disabled while saving and shows a saving status.
+
 ## 2.2.2 — 2026-09-25
 - 상단 점 3개 메뉴를 viewport 기준 플로팅 레이어로 조정해 상세 화면에서 가려지는 현상 방지.
 - 개인정보처리방침/서비스 이용약관이 앱의 다크모드 설정을 자동으로 이어받도록 변경.
