@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static stability audit for My Lesson Diary v2.2.1."""
+"""Static stability audit for My Lesson Diary v2.2.2."""
 from pathlib import Path
 import re, subprocess, shutil, sys
 
@@ -16,7 +16,7 @@ checks = []
 def check(name, ok, detail=''):
     checks.append((name, bool(ok), detail))
 
-check('app version 2.2.1', APP.count('"2.2.1"') >= 2)
+check('app version 2.2.2', APP.count('"2.2.2"') >= 2)
 check('schema version 3', bool(re.search(r'\bgu\s*=\s*3\b', APP)))
 check('single color palette', 'Tm =' not in APP and 'Tm=' not in APP and APP.count('var zm = [') == 1)
 check('no native confirm', 'window.confirm' not in APP)
@@ -35,11 +35,14 @@ check('runtime CSS injection removed', 'app-theme-css' not in APP)
 check('external stylesheet linked', 'href="./styles.css"' in TPL or "href='./styles.css'" in TPL)
 check('zoom accessibility enabled', 'user-scalable=no' not in TPL and 'maximum-scale=1' not in TPL)
 check('external service worker registration', "serviceWorker.register('./sw.js'" in TPL)
-check('scoped SW cache cleanup', "key.startsWith('mylesson-')" in SW and "CACHE_NAME = 'mylesson-v221'" in SW)
+check('scoped SW cache cleanup', "key.startsWith('mylesson-')" in SW and "CACHE_NAME = 'mylesson-v222'" in SW)
 check('SW caches stylesheet', "'./styles.css'" in SW)
 check('build copies stylesheet', '"styles.css"' in BUILD)
 check('privacy wording updated', '운영자' not in PRIV and '개발자' in PRIV)
 check('terms wording updated', '운영자' not in TERMS and '개발자' in TERMS)
+check('legal pages inherit dark mode', all("app_theme_dark" in x and "data-theme=dark" in x for x in [PRIV, TERMS]))
+check('legal pages floating close', all('class=\"close-float\"' in x and 'window.close()' in x for x in [PRIV, TERMS]))
+check('mobile menu viewport layer', '.app-menu{position:fixed!important' in TPL and 'z-index:120' in TPL)
 check('one spinner keyframe in stylesheet', CSS.count('@keyframes sbaspin') == 1)
 
 node = shutil.which('node')
