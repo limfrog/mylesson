@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.4 — 2026-09-25
+- Google Calendar 이벤트 색상을 학생 개별색 또는 폴더색 기준으로 선택 가능
+- 앱 색상을 Google Calendar 기본 이벤트 색 팔레트의 가장 가까운 색으로 매핑
+- 선택한 색이 없거나 폴더색 모드에서 폴더 미지정 학생은 Google Calendar 기본색 사용
+- 추가 Google Calendar 권한 없이 기존 calendar.events 권한만 사용
+
 ## 2.2.3 — 2026-09-25
 - Prevent duplicate student saves and duplicate Google Calendar event creation with synchronous in-flight locks.
 - Student save button is disabled while saving and shows a saving status.
