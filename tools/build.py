@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""My Lesson Diary v2.2 build.
+"""My Lesson Diary v2.2.1 build.
 
 src/app.js + src/index.template.html -> deploy/index.html
 Also copies deploy companion files. Uses local esbuild only when installed; never invokes npx/network.
@@ -51,8 +51,8 @@ def static_guard(code: str, tpl: str) -> None:
     for token in forbidden:
         if token in code:
             sys.exit(f"stability guard failed: {token} remains")
-    if '"2.2.0"' not in code:
-        sys.exit("stability guard failed: app version 2.2.0 missing")
+    if '"2.2.1"' not in code:
+        sys.exit("stability guard failed: app version 2.2.1 missing")
     if "serviceWorker.register('./sw.js'" not in tpl:
         sys.exit("stability guard failed: external service worker registration missing")
     if "user-scalable=no" in tpl or "maximum-scale=1" in tpl:
