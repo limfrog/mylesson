@@ -79,7 +79,7 @@
 
     body,html{background:var(--bg)!important;color:var(--text)}
     .app-wrap{background:var(--bg);min-height:100vh;min-height:100dvh}
-    .app-header{background:var(--header-bg)!important;transition:none!important;isolation:isolate}
+    .app-header{background:var(--header-bg)!important;transition:none!important;isolation:isolate;position:relative;z-index:120}
     @media(max-width:767px){.app-header{padding-left:max(20px,env(safe-area-inset-left))!important;padding-right:max(20px,env(safe-area-inset-right))!important}.app-header::before{content:"";position:absolute;left:0;right:0;top:-100px;height:100px;background:#6366f1;z-index:-1}[data-theme="dark"] .app-header::before{background:#312e81}}
     .app-header *{transition:none!important}
     .app-tabbar{background:var(--tab-bg);border-bottom:1.5px solid var(--tab-border)}
@@ -165,6 +165,9 @@
       .app-lang-switch{background:rgba(255,255,255,.13)!important;border:1px solid rgba(255,255,255,.08);border-radius:12px!important;padding:2px!important}
       .app-lang-switch button{min-height:34px!important;padding:4px 10px!important}
       .app-menu-wrap>button{width:40px!important;height:40px!important;border-radius:12px!important;background:rgba(255,255,255,.13)!important}
+      /* 메뉴가 상세 화면/고정 탭바 뒤로 가려지지 않도록 viewport 기준으로 띄운다. */
+      .app-menu{position:fixed!important;top:calc(env(safe-area-inset-top,0px) + 66px)!important;right:max(14px,env(safe-area-inset-right,0px))!important;left:auto!important;z-index:1001!important;max-width:calc(100vw - 28px)!important}
+      .app-menu-wrap>div[style*="position: fixed"]{z-index:1000!important}
 
       /* 정상 동기화는 알림 바가 아니라 얇은 상태 행으로 보이게 한다. */
       .syncbar-ok{background:var(--surface)!important;border-bottom:1px solid var(--border)!important}
