@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""My Lesson Diary v2.2.5 build.
+"""My Lesson Diary v2.2.6 build.
 
 src/app.js + src/index.template.html -> deploy/index.html
 Also copies deploy companion files. Uses local esbuild only when installed; never invokes npx/network.
@@ -51,10 +51,14 @@ def static_guard(code: str, tpl: str) -> None:
     for token in forbidden:
         if token in code:
             sys.exit(f"stability guard failed: {token} remains")
-    if '"2.2.5"' not in code:
-        sys.exit("stability guard failed: app version 2.2.5 missing")
+    if '"2.2.6"' not in code:
+        sys.exit("stability guard failed: app version 2.2.6 missing")
     if "serviceWorker.register('./sw.js'" not in tpl:
         sys.exit("stability guard failed: external service worker registration missing")
+    if 'href="./manifest.webmanifest"' not in tpl:
+        sys.exit("PWA guard failed: external manifest link missing")
+    if 'href="./apple-touch-icon.png"' not in tpl:
+        sys.exit("icon guard failed: Apple Touch Icon missing")
     if "user-scalable=no" in tpl or "maximum-scale=1" in tpl:
         sys.exit("accessibility guard failed: viewport zoom is disabled")
 
@@ -67,7 +71,13 @@ def main() -> None:
     bundle = maybe_minify(code)
     DEPLOY.mkdir(exist_ok=True)
     OUT.write_text(tpl.replace(MARK, bundle), encoding="utf-8")
-    for name in ["privacy.html", "terms.html", "sw.js", "styles.css", "logo.png", "logo.svg"]:
+    companion = [
+        "privacy.html", "terms.html", "sw.js", "styles.css", "logo.png", "logo.svg",
+        "manifest.webmanifest", "favicon.ico", "favicon-16x16.png", "favicon-32x32.png",
+        "apple-touch-icon.png", "android-chrome-192x192.png", "android-chrome-512x512.png",
+        "maskable-icon-512x512.png", "icon-1024x1024.png"
+    ]
+    for name in companion:
         src = ROOT / name
         if src.exists():
             shutil.copy2(src, DEPLOY / name)

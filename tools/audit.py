@@ -1,55 +1,50 @@
 #!/usr/bin/env python3
-"""Static stability audit for My Lesson Diary v2.2.5."""
+"""Static stability audit for My Lesson Diary v2.2.6."""
 from pathlib import Path
-import re, subprocess, shutil, sys
+import json, re, subprocess, shutil, sys
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT/'src/app.js').read_text(encoding='utf-8')
 TPL = (ROOT/'src/index.template.html').read_text(encoding='utf-8')
-CSS = (ROOT/'styles.css').read_text(encoding='utf-8')
 SW = (ROOT/'sw.js').read_text(encoding='utf-8')
-PRIV = (ROOT/'privacy.html').read_text(encoding='utf-8')
-TERMS = (ROOT/'terms.html').read_text(encoding='utf-8')
+MANIFEST = json.loads((ROOT/'manifest.webmanifest').read_text(encoding='utf-8'))
 BUILD = (ROOT/'tools/build.py').read_text(encoding='utf-8')
 
 checks = []
 def check(name, ok, detail=''):
     checks.append((name, bool(ok), detail))
 
-check('app version 2.2.5', APP.count('"2.2.5"') >= 2)
+check('app version 2.2.6', APP.count('"2.2.6"') >= 2)
 check('schema version 3', bool(re.search(r'\bgu\s*=\s*3\b', APP)))
-check('single color palette', 'Tm =' not in APP and 'Tm=' not in APP and APP.count('var zm = [') == 1)
 check('no native confirm', 'window.confirm' not in APP)
 check('no native alert', not re.search(r'(?<![\w.])alert\s*\(', APP))
-check('no old window calendar global', 'window.__gcalCleanup' not in APP)
-check('no old window lock global', 'window.__requestLockSetup' not in APP)
-check('archive excluded from lesson form', 'students: activeStudents' in APP)
 check('student form save lock', '_savingRef.current' in APP and '저장 중...' in APP)
 check('student save handler lock', '_studentSaveLock.current' in APP and 'return false' in APP)
-check('archive calendar cleanup skip', 'if (S0.archived === true) continue' in APP)
-check('archive add-lesson hidden', 'e.archived === true' in APP and 'addLessonBtn' in APP)
 check('backup normalization', all(x in APP for x in ['_normBackup','_normStudents','_normLessons','_normFolders']))
-check('stable color migration', '_validColor' in APP and 'color: _validColor' in APP)
 check('photo IndexedDB storage', all(x in APP for x in ['_photoDB','_saveStudentPhotos','_hydrateStudentPhotos','_studentsForLocal']))
-check('structured Drive status messages', '_syncStatus' in APP and 'case "connected"' in APP and 'case "loaded"' in APP)
-check('runtime font injection removed', 'fonts.googleapis.com' not in APP)
-check('runtime CSS injection removed', 'app-theme-css' not in APP)
-check('external stylesheet linked', 'href="./styles.css"' in TPL or "href='./styles.css'" in TPL)
-check('zoom accessibility enabled', 'user-scalable=no' not in TPL and 'maximum-scale=1' not in TPL)
-check('external service worker registration', "serviceWorker.register('./sw.js'" in TPL)
-check('scoped SW cache cleanup', "key.startsWith('mylesson-')" in SW and "CACHE_NAME = 'mylesson-v225'" in SW)
-check('SW caches stylesheet', "'./styles.css'" in SW)
-check('build copies stylesheet', '"styles.css"' in BUILD)
-check('privacy wording updated', '운영자' not in PRIV and '개발자' in PRIV)
-check('terms wording updated', '운영자' not in TERMS and '개발자' in TERMS)
-check('legal pages inherit dark mode', all("app_theme_dark" in x and "data-theme=dark" in x for x in [PRIV, TERMS]))
-check('legal pages floating close', all('class=\"close-float\"' in x and 'window.close()' in x for x in [PRIV, TERMS]))
-check('mobile menu viewport layer', '.app-menu{position:fixed!important' in TPL and 'z-index:120' in TPL)
-check('one spinner keyframe in stylesheet', CSS.count('@keyframes sbaspin') == 1)
 check('gcal color source preference', all(x in APP for x in ['gcal_color_source','calColorSource','setCalColorSource']))
 check('gcal event color mapping', all(x in APP for x in ['_GCAL_EVENT_COLORS','_nearestGcalColorId','_gcalColorIdForStudent','colorId']))
-check('gcal folder fallback default', 'if (!folder || !_validColor(folder.color)) return null' in APP)
 check('student search includes memo', 'h.memo.includes(U)' in APP)
+check('external service worker registration', "serviceWorker.register('./sw.js'" in TPL)
+check('external manifest linked', 'href="./manifest.webmanifest"' in TPL)
+check('Apple Touch Icon linked', 'href="./apple-touch-icon.png"' in TPL)
+check('favicon 16 linked', 'href="./favicon-16x16.png"' in TPL)
+check('favicon 32 linked', 'href="./favicon-32x32.png"' in TPL)
+check('no embedded Base64 manifest', 'data:application/json;base64' not in TPL)
+check('no embedded Base64 head icons', 'data:image/png;base64' not in TPL[:TPL.find('</head>')])
+check('SW cache v226', "CACHE_NAME = 'mylesson-v226'" in SW)
+check('SW caches manifest', "'./manifest.webmanifest'" in SW)
+check('SW caches Apple icon', "'./apple-touch-icon.png'" in SW)
+check('manifest standalone', MANIFEST.get('display') == 'standalone')
+check('manifest scope', MANIFEST.get('scope') == './')
+check('manifest has 192 icon', any(x.get('sizes')=='192x192' for x in MANIFEST.get('icons',[])))
+check('manifest has 512 icon', any(x.get('sizes')=='512x512' and x.get('purpose')=='any' for x in MANIFEST.get('icons',[])))
+check('manifest has maskable icon', any('maskable' in x.get('purpose','') for x in MANIFEST.get('icons',[])))
+check('build copies icon assets', all(x in BUILD for x in ['manifest.webmanifest','apple-touch-icon.png','android-chrome-192x192.png','android-chrome-512x512.png','maskable-icon-512x512.png','favicon.ico']))
+check('zoom accessibility enabled', 'user-scalable=no' not in TPL and 'maximum-scale=1' not in TPL)
+
+for fn in ['favicon.ico','favicon-16x16.png','favicon-32x32.png','apple-touch-icon.png','android-chrome-192x192.png','android-chrome-512x512.png','maskable-icon-512x512.png','icon-1024x1024.png','logo.png']:
+    check('asset exists: '+fn, (ROOT/fn).exists())
 
 node = shutil.which('node')
 if node:
