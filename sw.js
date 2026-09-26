@@ -1,5 +1,5 @@
-/* My Lesson Diary service worker v2.2.4 */
-const CACHE_NAME = 'mylesson-v224';
+/* My Lesson Diary service worker v2.2.5 */
+const CACHE_NAME = 'mylesson-v225';
 const APP_SHELL = ['./', './index.html', './privacy.html', './terms.html', './styles.css', './logo.png', './logo.svg'];
 
 self.addEventListener('install', (event) => {
