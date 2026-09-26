@@ -1,6 +1,14 @@
 # 나의 레슨일지 (My Lesson Diary)
 
-현재 안정화 버전: **2.2.5**
+현재 안정화 버전: **2.2.6**
+
+## v2.2.6 변경사항
+- 새 레슨 체크카드 아이콘 적용
+- favicon 16/32px 및 favicon.ico 적용
+- iPhone 홈 화면용 180px Apple Touch Icon 적용
+- PWA 192/512px 및 maskable 아이콘 적용
+- 인라인 Base64 아이콘/manifest를 실제 파일 기반으로 전환
+- Service Worker 캐시를 mylesson-v226으로 갱신
 
 ## 개발
 ```bash

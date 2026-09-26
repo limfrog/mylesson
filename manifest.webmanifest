@@ -1,0 +1,37 @@
+{
+  "name": "나의 레슨일지",
+  "short_name": "레슨일지",
+  "description": "선생님을 위한 학생 관리 & 수업 기록 앱",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f7fb",
+  "theme_color": "#6366f1",
+  "orientation": "portrait",
+  "categories": [
+    "education",
+    "productivity",
+    "music"
+  ],
+  "icons": [
+    {
+      "src": "./android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./maskable-icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

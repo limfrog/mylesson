@@ -1,6 +1,11 @@
-/* My Lesson Diary service worker v2.2.5 */
-const CACHE_NAME = 'mylesson-v225';
-const APP_SHELL = ['./', './index.html', './privacy.html', './terms.html', './styles.css', './logo.png', './logo.svg'];
+/* My Lesson Diary service worker v2.2.6 */
+const CACHE_NAME = 'mylesson-v226';
+const APP_SHELL = [
+  './', './index.html', './privacy.html', './terms.html', './styles.css',
+  './manifest.webmanifest', './favicon.ico', './favicon-16x16.png', './favicon-32x32.png',
+  './apple-touch-icon.png', './android-chrome-192x192.png', './android-chrome-512x512.png',
+  './maskable-icon-512x512.png', './logo.png', './logo.svg'
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -27,7 +32,6 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // HTML/navigation: prefer fresh deployment, fall back to cached shell offline.
   if (req.mode === 'navigate' || req.destination === 'document') {
     event.respondWith(
       fetch(req)
@@ -43,7 +47,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Same-origin static assets: cache first, refresh in background when possible.
   event.respondWith(
     caches.match(req).then((cached) => {
       const fresh = fetch(req).then((res) => {
