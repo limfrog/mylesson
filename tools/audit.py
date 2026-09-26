@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static stability audit for My Lesson Diary v2.2.6."""
+"""Static stability audit for My Lesson Diary v2.2.7."""
 from pathlib import Path
 import json, re, subprocess, shutil, sys
 
@@ -14,13 +14,17 @@ checks = []
 def check(name, ok, detail=''):
     checks.append((name, bool(ok), detail))
 
-check('app version 2.2.6', APP.count('"2.2.6"') >= 2)
+check('app version 2.2.7', APP.count('"2.2.7"') >= 2)
 check('schema version 3', bool(re.search(r'\bgu\s*=\s*3\b', APP)))
 check('no native confirm', 'window.confirm' not in APP)
 check('no native alert', not re.search(r'(?<![\w.])alert\s*\(', APP))
 check('student form save lock', '_savingRef.current' in APP and '저장 중...' in APP)
 check('student save handler lock', '_studentSaveLock.current' in APP and 'return false' in APP)
 check('backup normalization', all(x in APP for x in ['_normBackup','_normStudents','_normLessons','_normFolders']))
+check('local backup includes app settings', all(x in APP for x in ['_normBackupSettings','_collectBackupSettings','settings: _collectBackupSettings()']))
+check('local backup restores app settings', '_applyBackupSettings(nd.settings)' in APP and '_importLocal(C.students, C.lessons, C.folders, C.settings)' in APP)
+check('local backup legacy compatible', 'settings: _normBackupSettings(v.settings)' in APP)
+check('local backup excludes credentials', 'Google 로그인 정보와 앱 잠금 PIN은 포함하지 않습니다.' in APP)
 check('photo IndexedDB storage', all(x in APP for x in ['_photoDB','_saveStudentPhotos','_hydrateStudentPhotos','_studentsForLocal']))
 check('gcal color source preference', all(x in APP for x in ['gcal_color_source','calColorSource','setCalColorSource']))
 check('gcal event color mapping', all(x in APP for x in ['_GCAL_EVENT_COLORS','_nearestGcalColorId','_gcalColorIdForStudent','colorId']))
@@ -32,7 +36,7 @@ check('favicon 16 linked', 'href="./favicon-16x16.png"' in TPL)
 check('favicon 32 linked', 'href="./favicon-32x32.png"' in TPL)
 check('no embedded Base64 manifest', 'data:application/json;base64' not in TPL)
 check('no embedded Base64 head icons', 'data:image/png;base64' not in TPL[:TPL.find('</head>')])
-check('SW cache v226', "CACHE_NAME = 'mylesson-v226'" in SW)
+check('SW cache v227', "CACHE_NAME = 'mylesson-v227'" in SW)
 check('SW caches manifest', "'./manifest.webmanifest'" in SW)
 check('SW caches Apple icon', "'./apple-touch-icon.png'" in SW)
 check('manifest standalone', MANIFEST.get('display') == 'standalone')
