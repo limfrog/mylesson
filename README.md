@@ -1,14 +1,15 @@
 # 나의 레슨일지 (My Lesson Diary)
 
-현재 안정화 버전: **2.2.6**
+현재 안정화 버전: **2.2.7**
 
-## v2.2.6 변경사항
-- 새 레슨 체크카드 아이콘 적용
-- favicon 16/32px 및 favicon.ico 적용
-- iPhone 홈 화면용 180px Apple Touch Icon 적용
-- PWA 192/512px 및 maskable 아이콘 적용
-- 인라인 Base64 아이콘/manifest를 실제 파일 기반으로 전환
-- Service Worker 캐시를 mylesson-v226으로 갱신
+## v2.2.7 변경사항
+- 로컬 JSON 백업에 앱 환경설정 포함
+- 다크 모드, 언어, 학생 표시 항목, 정렬/밀도, 폴더 보기·접힘 상태 백업/복원
+- 수업 목록 정렬/밀도/폴더 보기·접힘 상태 백업/복원
+- Google Calendar 동기화 사용 여부와 이벤트 색상 기준 백업/복원
+- Google 로그인 토큰·Drive 연결 정보·앱 잠금 PIN/복구정보는 보안상 백업에서 제외
+- 구버전 JSON 백업은 기존처럼 학생·수업·폴더 데이터만 정상 복원
+- Service Worker 캐시를 mylesson-v227로 갱신
 
 ## 개발
 ```bash
