@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static stability audit for My Lesson Diary v2.2.8."""
+"""Static stability audit for My Lesson Diary v2.2.9."""
 from pathlib import Path
 import json, re, subprocess, shutil, sys
 
@@ -14,7 +14,7 @@ checks = []
 def check(name, ok, detail=''):
     checks.append((name, bool(ok), detail))
 
-check('app version 2.2.8', APP.count('"2.2.8"') >= 2)
+check('app version 2.2.9', APP.count('"2.2.9"') >= 2)
 check('schema version 3', bool(re.search(r'\bgu\s*=\s*3\b', APP)))
 check('no native confirm', 'window.confirm' not in APP)
 check('no native alert', not re.search(r'(?<![\w.])alert\s*\(', APP))
@@ -43,7 +43,7 @@ check('favicon 16 linked', 'href="./favicon-16x16.png"' in TPL)
 check('favicon 32 linked', 'href="./favicon-32x32.png"' in TPL)
 check('no embedded Base64 manifest', 'data:application/json;base64' not in TPL)
 check('no embedded Base64 head icons', 'data:image/png;base64' not in TPL[:TPL.find('</head>')])
-check('SW cache v228', "CACHE_NAME = 'mylesson-v228'" in SW)
+check('SW cache v229', "CACHE_NAME = 'mylesson-v229'" in SW)
 check('SW caches manifest', "'./manifest.webmanifest'" in SW)
 check('SW caches Apple icon', "'./apple-touch-icon.png'" in SW)
 check('manifest standalone', MANIFEST.get('display') == 'standalone')
@@ -53,6 +53,10 @@ check('manifest has 512 icon', any(x.get('sizes')=='512x512' and x.get('purpose'
 check('manifest has maskable icon', any('maskable' in x.get('purpose','') for x in MANIFEST.get('icons',[])))
 check('build copies icon assets', all(x in BUILD for x in ['manifest.webmanifest','apple-touch-icon.png','android-chrome-192x192.png','android-chrome-512x512.png','maskable-icon-512x512.png','favicon.ico']))
 check('zoom accessibility enabled', 'user-scalable=no' not in TPL and 'maximum-scale=1' not in TPL)
+
+check('calendar year month picker', all(x in APP for x in ['calendarPickerOpen','pickerYear','pickerMonth','applyYearMonth','연도와 월 선택']))
+check('calendar week navigation', all(x in APP for x in ['moveWeek(-1)','moveWeek(1)','이전 주','다음 주','weekLabel']))
+check('calendar student date search', all(x in APP for x in ['calSearch','searchResults','학생 이름으로 수업일자 검색','maxHeight: 260','overflowY: "auto"']))
 
 for fn in ['favicon.ico','favicon-16x16.png','favicon-32x32.png','apple-touch-icon.png','android-chrome-192x192.png','android-chrome-512x512.png','maskable-icon-512x512.png','icon-1024x1024.png','logo.png']:
     check('asset exists: '+fn, (ROOT/fn).exists())
