@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static stability audit for My Lesson Diary v2.2.7."""
+"""Static stability audit for My Lesson Diary v2.2.8."""
 from pathlib import Path
 import json, re, subprocess, shutil, sys
 
@@ -14,7 +14,7 @@ checks = []
 def check(name, ok, detail=''):
     checks.append((name, bool(ok), detail))
 
-check('app version 2.2.7', APP.count('"2.2.7"') >= 2)
+check('app version 2.2.8', APP.count('"2.2.8"') >= 2)
 check('schema version 3', bool(re.search(r'\bgu\s*=\s*3\b', APP)))
 check('no native confirm', 'window.confirm' not in APP)
 check('no native alert', not re.search(r'(?<![\w.])alert\s*\(', APP))
@@ -29,6 +29,13 @@ check('photo IndexedDB storage', all(x in APP for x in ['_photoDB','_saveStudent
 check('gcal color source preference', all(x in APP for x in ['gcal_color_source','calColorSource','setCalColorSource']))
 check('gcal event color mapping', all(x in APP for x in ['_GCAL_EVENT_COLORS','_nearestGcalColorId','_gcalColorIdForStudent','colorId']))
 check('student search includes memo', 'h.memo.includes(U)' in APP)
+check('Google startup auto reconnect', 'saved != null && saved.email && !g(saved) && w(saved, true)' in APP)
+check('Google resume auto reconnect', 'document.addEventListener("visibilitychange", resume)' in APP and 'window.addEventListener("pageshow", resume)' in APP)
+check('Google GIS load wait', 'function waitForGIS()' in APP and '++tries >= 40' in APP and 'setTimeout(tick, 150)' in APP)
+check('Google refresh deduplicated', '_refreshInFlight.current' in APP and 'if (_refreshInFlight.current) return _refreshInFlight.current' in APP)
+check('Google refresh does not require old token', 'if (!(k != null && k.email)) return Promise.resolve(false)' in APP)
+check('Google token threshold aligned', APP.count('300 * 1e3') >= 2 and '240 * 1e3' not in APP[APP.find('function p1'):APP.find('function sc')])
+check('Google reconnect status messages', all(x in APP for x in ['"reconnecting"','"reconnected"','Google 연결 자동 복원 중','Google 연결 자동 복원 완료']))
 check('external service worker registration', "serviceWorker.register('./sw.js'" in TPL)
 check('external manifest linked', 'href="./manifest.webmanifest"' in TPL)
 check('Apple Touch Icon linked', 'href="./apple-touch-icon.png"' in TPL)
@@ -36,7 +43,7 @@ check('favicon 16 linked', 'href="./favicon-16x16.png"' in TPL)
 check('favicon 32 linked', 'href="./favicon-32x32.png"' in TPL)
 check('no embedded Base64 manifest', 'data:application/json;base64' not in TPL)
 check('no embedded Base64 head icons', 'data:image/png;base64' not in TPL[:TPL.find('</head>')])
-check('SW cache v227', "CACHE_NAME = 'mylesson-v227'" in SW)
+check('SW cache v228', "CACHE_NAME = 'mylesson-v228'" in SW)
 check('SW caches manifest', "'./manifest.webmanifest'" in SW)
 check('SW caches Apple icon', "'./apple-touch-icon.png'" in SW)
 check('manifest standalone', MANIFEST.get('display') == 'standalone')
