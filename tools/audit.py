@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static stability audit for My Lesson Diary v2.2.15."""
+"""Static stability audit for My Lesson Diary v2.2.16."""
 from pathlib import Path
 import json, re, subprocess, shutil, sys
 
@@ -14,7 +14,7 @@ checks = []
 def check(name, ok, detail=''):
     checks.append((name, bool(ok), detail))
 
-check('app version 2.2.15', APP.count('"2.2.15"') >= 2)
+check('app version 2.2.16', APP.count('\"2.2.16\"') >= 2)
 check('schema version 3', bool(re.search(r'\bgu\s*=\s*3\b', APP)))
 check('no native confirm', 'window.confirm' not in APP)
 check('no native alert', not re.search(r'(?<![\w.])alert\s*\(', APP))
@@ -43,7 +43,7 @@ check('favicon 16 linked', 'href="./favicon-16x16.png"' in TPL)
 check('favicon 32 linked', 'href="./favicon-32x32.png"' in TPL)
 check('no embedded Base64 manifest', 'data:application/json;base64' not in TPL)
 check('no embedded Base64 head icons', 'data:image/png;base64' not in TPL[:TPL.find('</head>')])
-check('SW cache v2215', "CACHE_NAME = 'mylesson-v2215'" in SW)
+check('SW cache v2216', "CACHE_NAME = 'mylesson-v2216'" in SW)
 check('SW caches manifest', "'./manifest.webmanifest'" in SW)
 check('SW caches Apple icon', "'./apple-touch-icon.png'" in SW)
 check('manifest standalone', MANIFEST.get('display') == 'standalone')
@@ -59,7 +59,8 @@ check('calendar year drum UI', all(x in APP for x in ['yearDrumRef','연도 드�
 check('calendar week navigation', all(x in APP for x in ['moveWeek(-1)','moveWeek(1)','이전 주','다음 주','weekLabel']))
 check('calendar search button toggle', all(x in APP for x in ['calSearchOpen','setCalSearchOpen','children: l === "ko" ? "검색" : "Search"']))
 check('calendar student date search', all(x in APP for x in ['calSearch','searchResults','학생 이름으로 수업일자 검색','maxHeight: 300','overflowY: "auto"']))
-check('calendar search includes scheduled dates', all(x in APP for x in ['buildStudentDateRows','searchStudents.flatMap(buildStudentDateRows)','Om(A, Me)','K.setDate(K.getDate() + 366)']))
+check('calendar search includes historical scheduled dates', all(x in APP for x in ['buildStudentDateRows','searchStudents.flatMap(buildStudentDateRows)','if (!C.date || C.date > N) return','if (W > N) return','ee > C && (ee = new Date(C))']))
+check('calendar search newest first and no future dates', 'filter((K) => K.date <= N)' in APP and 'sort((A, Y) => Y.date.localeCompare(A.date)' in APP)
 check('calendar search fee-paid icon', 'title: l === "ko" ? "수업료 납부" : "Fee paid"' in APP and 'children: "💰"' in APP)
 check('calendar student legend removed', 'e.length > 0 && (0, o.jsx)(\"div\", { style: { display: \"flex\", flexWrap: \"wrap\", gap: 8, marginBottom: 12' not in APP)
 check('settings dark-mode status cards use theme variables', all(x in APP for x in ['background: \"var(--green-bg)\"', 'background: \"var(--surface2)\"', 'background: \"var(--purple-bg)\"', 'color: \"var(--green-text)\"']))
