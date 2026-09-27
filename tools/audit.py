@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static stability audit for My Lesson Diary v2.2.10."""
+"""Static stability audit for My Lesson Diary v2.2.13."""
 from pathlib import Path
 import json, re, subprocess, shutil, sys
 
@@ -14,7 +14,7 @@ checks = []
 def check(name, ok, detail=''):
     checks.append((name, bool(ok), detail))
 
-check('app version 2.2.10', APP.count('"2.2.10"') >= 2)
+check('app version 2.2.13', APP.count('"2.2.13"') >= 2)
 check('schema version 3', bool(re.search(r'\bgu\s*=\s*3\b', APP)))
 check('no native confirm', 'window.confirm' not in APP)
 check('no native alert', not re.search(r'(?<![\w.])alert\s*\(', APP))
@@ -43,7 +43,7 @@ check('favicon 16 linked', 'href="./favicon-16x16.png"' in TPL)
 check('favicon 32 linked', 'href="./favicon-32x32.png"' in TPL)
 check('no embedded Base64 manifest', 'data:application/json;base64' not in TPL)
 check('no embedded Base64 head icons', 'data:image/png;base64' not in TPL[:TPL.find('</head>')])
-check('SW cache v2210', "CACHE_NAME = 'mylesson-v2210'" in SW)
+check('SW cache v2213', "CACHE_NAME = 'mylesson-v2213'" in SW)
 check('SW caches manifest', "'./manifest.webmanifest'" in SW)
 check('SW caches Apple icon', "'./apple-touch-icon.png'" in SW)
 check('manifest standalone', MANIFEST.get('display') == 'standalone')
@@ -61,6 +61,19 @@ check('calendar search button toggle', all(x in APP for x in ['calSearchOpen','s
 check('calendar student date search', all(x in APP for x in ['calSearch','searchResults','학생 이름으로 수업일자 검색','maxHeight: 300','overflowY: "auto"']))
 check('calendar search includes scheduled dates', all(x in APP for x in ['buildStudentDateRows','searchStudents.flatMap(buildStudentDateRows)','Om(A, Me)','K.setDate(K.getDate() + 366)']))
 check('calendar search fee-paid icon', 'title: l === "ko" ? "수업료 납부" : "Fee paid"' in APP and 'children: "💰"' in APP)
+check('calendar student legend removed', 'e.length > 0 && (0, o.jsx)(\"div\", { style: { display: \"flex\", flexWrap: \"wrap\", gap: 8, marginBottom: 12' not in APP)
+check('settings dark-mode status cards use theme variables', all(x in APP for x in ['background: \"var(--green-bg)\"', 'background: \"var(--surface2)\"', 'background: \"var(--purple-bg)\"', 'color: \"var(--green-text)\"']))
+check('settings toggle labels use theme colors', 'borderBottom: \"1px solid var(--border)\"' in APP and 'fontSize: 14, fontWeight: 700, color: \"var(--text)\"' in APP)
+check('lesson content optional label', 'label: i(\"lessonContent\"), value: r.content' in APP and 'label: i(\"lessonContent\") + \" *\"' not in APP)
+check('lesson content optional save', 'disabled: !r.studentId, children: i(\"save\")' in APP and '!r.content.trim()' not in APP)
+check('empty lesson content hidden in card', 'e.content && (0, o.jsx)(Vt, { title: r(\"lessonContent\"), text: e.content })' in APP)
+
+check('calendar print button', all(x in APP for x in ['printCalendar','월간 캘린더 인쇄','주간 캘린더 인쇄','children: l === "ko" ? "인쇄" : "Print"']))
+check('calendar monthly print landscape', all(x in APP for x in ['@page{size:A4 landscape','월간 수업 일정','entries.slice(0, 10)','student-list${two ? " two" : ""}']))
+check('calendar monthly print time sort', '_calendarPrintEntries' in APP and 'zTimeMin(a0.time) - zTimeMin(b0.time)' in APP)
+check('calendar weekly print time and student', all(x in APP for x in ['@page{size:A4 portrait','주간 수업 일정','lesson-time','lesson-name','row.time ||']))
+check('calendar iOS share print path', all(x in APP for x in ['_calendarPrintDevice','navigator.share','navigator.canShare','new File([doc.html]','iOS 공유 메뉴에서 ‘프린트’를 선택하세요.']))
+check('calendar desktop print window', all(x in APP for x in ['_openCalendarPrintWindow','window.open("", "_blank")','win.print()']))
 
 for fn in ['favicon.ico','favicon-16x16.png','favicon-32x32.png','apple-touch-icon.png','android-chrome-192x192.png','android-chrome-512x512.png','maskable-icon-512x512.png','icon-1024x1024.png','logo.png']:
     check('asset exists: '+fn, (ROOT/fn).exists())
