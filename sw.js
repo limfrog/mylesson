@@ -1,5 +1,5 @@
-/* My Lesson Diary service worker v2.2.16 */
-const CACHE_NAME = 'mylesson-v2216';
+/* My Lesson Diary service worker v2.2.17 */
+const CACHE_NAME = 'mylesson-v2217';
 const APP_SHELL = [
   './', './index.html', './privacy.html', './terms.html', './styles.css',
   './manifest.webmanifest', './favicon.ico', './favicon-16x16.png', './favicon-32x32.png',

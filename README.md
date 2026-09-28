@@ -1,6 +1,14 @@
 # 나의 레슨일지 (My Lesson Diary)
 
-현재 안정화 버전: **2.2.16**
+현재 안정화 버전: **2.2.17**
+
+## v2.2.17 변경사항
+
+- Google access token이 만료되어도 앱 시작/복귀 과정에서 OAuth 팝업을 자동으로 열지 않도록 변경했습니다.
+- 만료 시에는 연결 상태만 `재로그인 필요`로 전환하고, 사용자가 `재로그인` 또는 Google 연결 버튼을 눌렀을 때만 인증 창을 엽니다.
+- 같은 Google 계정과 같은 권한으로 재로그인할 때는 저장된 이메일 힌트를 사용해 불필요한 계정 선택 단계를 줄였습니다.
+- Google Identity Services의 `popup_failed_to_open` / `popup_closed` 오류를 구분해 상태 메시지로 안내합니다.
+- Service Worker 캐시를 `mylesson-v2217`으로 갱신했습니다.
 
 ## v2.2.16 변경사항
 
