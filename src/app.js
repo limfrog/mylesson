@@ -7535,7 +7535,7 @@ All student data and lesson records will be deleted.`, lockPinRequired: "Please 
     if (!_isObj(v) || !Array.isArray(v.students) || !Array.isArray(v.lessons)) return null;
     let students = _normStudents(v.students), ids = new Set(students.map((q) => q.id));
     let lessons = _normLessons(v.lessons).filter((q) => ids.has(q.studentId));
-    return { version: Number(v.version || 1), students, lessons, folders: _normFolders(v.folders || []), settings: _normBackupSettings(v.settings) };
+    return { version: Number(v.version || 1), updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : "", students, lessons, folders: _normFolders(v.folders || []), settings: _normBackupSettings(v.settings), syncMeta: _normSyncMeta(v.syncMeta || v) };
   }
   const _PHOTO_DB = "mylesson_photos_v1", _PHOTO_STORE = "photos";
   function _photoDB() {
@@ -7559,6 +7559,112 @@ All student data and lesson records will be deleted.`, lockPinRequired: "Please 
     try { let db=await _photoDB(); if(!db) return students; let tx=db.transaction(_PHOTO_STORE,"readonly"), st0=tx.objectStore(_PHOTO_STORE); return await Promise.all((students||[]).map((q)=>q.photo ? q : new Promise((resolve)=>{let r=st0.get(q.id);r.onsuccess=()=>resolve(r.result?X(G({},q),{photo:r.result}):q);r.onerror=()=>resolve(q);}))); } catch(e) { return students; }
   }
   function _studentsForLocal(students) { return ("indexedDB" in window) ? (students||[]).map((q)=>{let c=G({},q); delete c.photo; return c;}) : students; }
+  const _RECOVERY_DB = "mylesson_recovery_v1", _RECOVERY_STORE = "snapshots", _RECOVERY_LIMIT = 10, _DEVICE_ID_KEY = "mylesson_device_id_v1", _DATA_META_KEY = "mylesson_data_meta_v1", _DATA_DIRTY_KEY = "mylesson_data_dirty_v1", _CLOUD_SEEN_KEY = "mylesson_cloud_seen_v1";
+  let _localDataCorrupt = false, _storageNoticeAt = 0;
+  function _readLocalArray(key, normalizer) {
+    try {
+      let raw = localStorage.getItem(key);
+      return normalizer(raw ? JSON.parse(raw) : []);
+    } catch (e) {
+      _localDataCorrupt = true;
+      console.warn("Local data parse failed:", key, e);
+      return normalizer([]);
+    }
+  }
+  function _safeStoreJSON(key, value, label = key) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      console.error("Local storage write failed:", key, e);
+      if (Date.now() - _storageNoticeAt > 8000) {
+        _storageNoticeAt = Date.now();
+        _uiNotice((navigator.language || "").startsWith("ko") ? `저장 공간이 부족해 ${label} 저장에 실패했습니다. 설정의 안전 복구본을 확인해주세요.` : `Storage is full. Could not save ${label}. Check Safety Recovery in Settings.`, "error");
+      }
+      return false;
+    }
+  }
+  function _deviceId() {
+    let id = "";
+    try { id = localStorage.getItem(_DEVICE_ID_KEY) || ""; } catch (e) {}
+    if (!id) {
+      id = (crypto != null && crypto.randomUUID) ? crypto.randomUUID() : zi();
+      try { localStorage.setItem(_DEVICE_ID_KEY, id); } catch (e) {}
+    }
+    return id;
+  }
+  function _normSyncMeta(raw) {
+    let v = _isObj(raw) ? raw : {};
+    return { revision: Math.max(0, Number(v.revision || 0) || 0), deviceId: typeof v.deviceId === "string" ? v.deviceId : "", updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : "" };
+  }
+  function _readDataMeta() {
+    try { return _normSyncMeta(JSON.parse(localStorage.getItem(_DATA_META_KEY) || "{}")); } catch (e) { return _normSyncMeta({}); }
+  }
+  function _writeDataMeta(meta) {
+    let next = _normSyncMeta(meta);
+    try { localStorage.setItem(_DATA_META_KEY, JSON.stringify(next)); } catch (e) {}
+    return next;
+  }
+  function _touchDataMeta() {
+    let prev = _readDataMeta(), next = { revision: prev.revision + 1, deviceId: _deviceId(), updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    return _writeDataMeta(next);
+  }
+  function _setDataDirty(value) { try { localStorage.setItem(_DATA_DIRTY_KEY, value ? "true" : "false"); } catch (e) {} }
+  function _isDataDirty() {
+    try { let v = localStorage.getItem(_DATA_DIRTY_KEY); return v === null ? true : v === "true"; } catch (e) { return true; }
+  }
+  function _cloudMeta(raw) {
+    let direct = _normSyncMeta(raw && raw.syncMeta), updatedAt = direct.updatedAt || raw && typeof raw.updatedAt === "string" && raw.updatedAt || "";
+    return { revision: direct.revision, deviceId: direct.deviceId, updatedAt };
+  }
+  function _markCloudSeen(raw) {
+    let meta = _cloudMeta(raw), stamp = meta.updatedAt || "";
+    try { stamp ? localStorage.setItem(_CLOUD_SEEN_KEY, stamp) : localStorage.removeItem(_CLOUD_SEEN_KEY); } catch (e) {}
+    if (meta.updatedAt || meta.revision || meta.deviceId) _writeDataMeta(meta);
+    _setDataDirty(false);
+    return meta;
+  }
+  function _lastCloudSeen() { try { return localStorage.getItem(_CLOUD_SEEN_KEY) || ""; } catch (e) { return ""; } }
+  function _nextCloudMeta(remote) {
+    let m = _cloudMeta(remote);
+    return { revision: Math.max(m.revision, _readDataMeta().revision) + 1, deviceId: _deviceId(), updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  }
+  function _recoveryDB() {
+    return new Promise((resolve, reject) => {
+      if (!("indexedDB" in window)) return resolve(null);
+      let req = indexedDB.open(_RECOVERY_DB, 1);
+      req.onupgradeneeded = () => { let db = req.result; if (!db.objectStoreNames.contains(_RECOVERY_STORE)) db.createObjectStore(_RECOVERY_STORE, { keyPath: "id" }); };
+      req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+    });
+  }
+  async function _listRecoverySnapshots() {
+    try {
+      let db = await _recoveryDB(); if (!db) return [];
+      return await new Promise((resolve) => { let req = db.transaction(_RECOVERY_STORE, "readonly").objectStore(_RECOVERY_STORE).getAll(); req.onsuccess = () => resolve((req.result || []).sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)))); req.onerror = () => resolve([]); });
+    } catch (e) { return []; }
+  }
+  async function _saveRecoverySnapshot(payload, reason = "auto") {
+    try {
+      let db = await _recoveryDB(); if (!db) return null;
+      let nd = _normBackup({ version: gu, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), students: payload.students || [], lessons: payload.lessons || [], folders: payload.folders || [], settings: payload.settings || _collectBackupSettings(), syncMeta: payload.syncMeta || _readDataMeta() });
+      if (!nd) return null;
+      let snap = { id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`, createdAt: (/* @__PURE__ */ new Date()).toISOString(), reason, data: nd };
+      await new Promise((resolve, reject) => { let tx = db.transaction(_RECOVERY_STORE, "readwrite"); tx.objectStore(_RECOVERY_STORE).put(snap); tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+      let all = await _listRecoverySnapshots();
+      if (all.length > _RECOVERY_LIMIT) await new Promise((resolve) => { let tx = db.transaction(_RECOVERY_STORE, "readwrite"), st0 = tx.objectStore(_RECOVERY_STORE); all.slice(_RECOVERY_LIMIT).forEach((x) => st0.delete(x.id)); tx.oncomplete = resolve; tx.onerror = resolve; });
+      return snap;
+    } catch (e) { console.warn("Recovery snapshot failed", e); return null; }
+  }
+  async function _latestRecoverySnapshot() { let all = await _listRecoverySnapshots(); return all[0] || null; }
+  async function _storageHealth(requestPersist = false) {
+    let info = { supported: !!navigator.storage, persisted: null, usage: 0, quota: 0, percent: 0 };
+    if (!navigator.storage) return info;
+    try { if (navigator.storage.persisted) info.persisted = await navigator.storage.persisted(); } catch (e) {}
+    if (requestPersist && !info.persisted && navigator.storage.persist) try { info.persisted = await navigator.storage.persist(); } catch (e) {}
+    try { if (navigator.storage.estimate) { let est = await navigator.storage.estimate(); info.usage = Number(est.usage || 0); info.quota = Number(est.quota || 0); info.percent = info.quota ? info.usage / info.quota * 100 : 0; } } catch (e) {}
+    return info;
+  }
+  function _formatStorageBytes(bytes) { let n = Number(bytes || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n/1024).toFixed(1)} KB`; if (n < 1073741824) return `${(n/1048576).toFixed(1)} MB`; return `${(n/1073741824).toFixed(2)} GB`; }
   function _uiNotice(msg, type="info") {
     let old=document.getElementById("mylesson-ui-notice"); if(old) old.remove();
     let el=document.createElement("div"); el.id="mylesson-ui-notice"; el.textContent=msg; el.setAttribute("role","status");
@@ -7773,9 +7879,9 @@ All student data and lesson records will be deleted.`, lockPinRequired: "Please 
         for (let col = 0; col < 7; col++) {
           let item = entriesByDay[col][offset + row], x = margin + col * colW, innerX = x + Math.round(1.6 * ppm), innerW = colW - Math.round(3.2 * ppm);
           if (!item) continue;
-          _pdfFont(ctx, Math.round(7.2 * dpi / 72), 650), ctx.fillStyle = "#6b7280";
+          _pdfFont(ctx, Math.round(7.2 * dpi / 72), 600), ctx.fillStyle = "#6b7280";
           ctx.fillText(_pdfFitText(ctx, item.time || (ko ? "시간 미정" : "No time"), innerW), innerX, y + Math.round(1.0 * ppm));
-          _pdfFont(ctx, Math.round(9.0 * dpi / 72), 750), ctx.fillStyle = "#111827";
+          _pdfFont(ctx, Math.round(9.0 * dpi / 72), 700), ctx.fillStyle = "#111827";
           ctx.fillText(_pdfFitText(ctx, item.student.name, innerW), innerX, y + Math.round(3.8 * ppm));
         }
       }
@@ -8082,12 +8188,17 @@ Content-Type: application/json\r
             m(Me.id), localStorage.setItem("gd_fileid", Me.id);
             let $ = await Wn.readFile(K, Me.id);
             if ($ != null && $.students && ($ != null && $.lessons)) {
-              a($.students, $.lessons, $.folders || []), r("ok"), d(_syncStatus("loadedExisting", { students: $.students.length }));
+              let hasLocal = (e != null && e.length) || (t != null && t.length) || (n != null && n.length);
+              if (hasLocal && _isDataDirty()) {
+                r("conflict"), d(_syncStatus("conflict", { remoteUpdatedAt: _cloudMeta($).updatedAt }));
+                return;
+              }
+              await a($.students, $.lessons, $.folders || [], null, { source: "cloud" }), _markCloudSeen($), r("ok"), d(_syncStatus("loadedExisting", { students: $.students.length }));
               return;
             }
           }
-          let Jt = await Wn.writeFile(K, null, { students: e, lessons: t, folders: n });
-          Jt && (m(Jt), localStorage.setItem("gd_fileid", Jt)), r("ok"), d(_syncStatus("connected"));
+          let initMeta = _nextCloudMeta(null), Jt = await Wn.writeFile(K, null, { students: e, lessons: t, folders: n, syncMeta: initMeta });
+          Jt && (m(Jt), localStorage.setItem("gd_fileid", Jt)), _markCloudSeen({ updatedAt: initMeta.updatedAt, syncMeta: initMeta }), r("ok"), d(_syncStatus("connected"));
         } catch (Z) {
           if ((_ = Z.message) != null && _.includes("401")) {
             S();
@@ -8151,18 +8262,25 @@ Content-Type: application/json\r
             localStorage.setItem("gd_fileid", Me.id);
             let Jt = await Wn.readFile(W.access_token, Me.id);
             if (Jt && Jt.students && Jt.lessons) {
-              a(Jt.students, Jt.lessons, Jt.folders || []);
+              let hasLocal = (e != null && e.length) || (t != null && t.length) || (n != null && n.length);
+              if (hasLocal && _isDataDirty()) {
+                r("conflict"), d(_syncStatus("conflict", { remoteUpdatedAt: _cloudMeta(Jt).updatedAt })), H(q);
+                return;
+              }
+              await a(Jt.students, Jt.lessons, Jt.folders || [], null, { source: "cloud" });
+              _markCloudSeen(Jt);
               r("ok");
               d(_syncStatus("loadedExisting", { students: Jt.students.length }));
               H(q);
               return;
             }
           }
-          let yt = await Wn.writeFile(W.access_token, null, { students: [], lessons: [], folders: [] });
+          let initMeta = _nextCloudMeta(null), yt = await Wn.writeFile(W.access_token, null, { students: e, lessons: t, folders: n, syncMeta: initMeta });
           if (yt) {
             m(yt);
             localStorage.setItem("gd_fileid", yt);
           }
+          _markCloudSeen({ updatedAt: initMeta.updatedAt, syncMeta: initMeta });
           r("ok");
           d(_syncStatus("connected"));
           H(q);
@@ -8191,7 +8309,7 @@ Content-Type: application/json\r
       }).finally(() => {
         _gisResolve.current = null, _gisReject.current = null;
       });
-    }, [f, l, a, H]);
+    }, [f, l, a, H, e, t, n]);
     (0, z.useEffect)(() => (l != null && l.expiresAt && (l != null && l.email) && H(l), () => clearTimeout(R.current)), [l == null ? void 0 : l.expiresAt, H]);
     (0, z.useEffect)(() => {
       let saved = (() => {
@@ -8275,7 +8393,7 @@ Content-Type: application/json\r
             r("ok"), d(_syncStatus("noData"));
             return;
           }
-          a(K.students, K.lessons, K.folders || []), r("ok"), d(_syncStatus("loaded", { students: K.students.length, lessons: K.lessons.length }));
+          await a(K.students, K.lessons, K.folders || [], null, { source: "cloud" }), _markCloudSeen(K), r("ok"), d(_syncStatus("loaded", { students: K.students.length, lessons: K.lessons.length }));
         } catch (C) {
           if ((k = C.message) != null && k.includes("401")) {
             S();
@@ -8284,28 +8402,36 @@ Content-Type: application/json\r
           r("error"), d(C.message);
         }
       }
-    }, [c, l, p, a, S]), F = (0, z.useCallback)(async (k, C, K) => {
+    }, [c, l, p, a, S]), F = (0, z.useCallback)(async (k, C, K, force = false) => {
       var W;
-      if (c) {
-        r("syncing");
-        try {
-          let ee = p;
-          if (!ee) {
-            let Z = await Wn.findFile(l.accessToken);
-            ee = (Z == null ? void 0 : Z.id) || null, ee && (m(ee), localStorage.setItem("gd_fileid", ee));
-          }
-          let _ = await Wn.writeFile(l.accessToken, ee, { students: k, lessons: C, folders: K || [] });
-          _ && !ee && (m(_), localStorage.setItem("gd_fileid", _)), r("ok"), d(_syncStatus("synced"));
-        } catch (ee) {
-          if ((W = ee.message) != null && W.includes("401")) {
-            S();
-            return;
-          }
-          r("error"), d(ee.message);
+      if (!c) return false;
+      r("syncing");
+      try {
+        let ee = p;
+        if (!ee) {
+          let Z = await Wn.findFile(l.accessToken);
+          ee = (Z == null ? void 0 : Z.id) || null, ee && (m(ee), localStorage.setItem("gd_fileid", ee));
         }
+        let remote = ee ? await Wn.readFile(l.accessToken, ee) : null, remoteMeta = _cloudMeta(remote), lastSeen = _lastCloudSeen(), deviceId = _deviceId();
+        if (!force && remote && remoteMeta.updatedAt && remoteMeta.deviceId !== deviceId && (!lastSeen || remoteMeta.updatedAt !== lastSeen)) {
+          r("conflict"), d(_syncStatus("conflict", { remoteUpdatedAt: remoteMeta.updatedAt }));
+          return false;
+        }
+        if (force && remote && remote.students && remote.lessons) await _saveRecoverySnapshot({ students: remote.students, lessons: remote.lessons, folders: remote.folders || [], settings: remote.settings || null, syncMeta: remote.syncMeta || _cloudMeta(remote) }, "cloud_before_force_overwrite");
+        let syncMeta = _nextCloudMeta(remote), payload = { students: k, lessons: C, folders: K || [], syncMeta }, _ = await Wn.writeFile(l.accessToken, ee, payload);
+        _ && !ee && (m(_), localStorage.setItem("gd_fileid", _));
+        _markCloudSeen({ updatedAt: syncMeta.updatedAt, syncMeta }), r("ok"), d(_syncStatus("synced"));
+        return true;
+      } catch (ee) {
+        if ((W = ee.message) != null && W.includes("401")) {
+          S();
+          return false;
+        }
+        r("error"), d(ee.message);
+        return false;
       }
     }, [c, l, p, S]), A = (0, z.useCallback)((k, C, K) => {
-      c && (clearTimeout(N.current), N.current = setTimeout(() => F(k, C, K), 1500));
+      c && (clearTimeout(N.current), N.current = setTimeout(() => F(k, C, K, false), 1500));
     }, [c, F]);
     return { isConnected: c, auth: l, tokenExpired: T, calEnabled: f, toggleCalendar: y, calColorSource, setCalColorSource, syncStatus: u, syncMsg: s, handleSignIn: U, signOut: () => {
       v({}), m(null), localStorage.removeItem("gd_fileid"), r("idle"), d(""), x(false);
@@ -8369,6 +8495,7 @@ Content-Type: application/json\r
         case "loaded": return ko ? `불러오기 완료 (학생 ${d.students || 0}명, 수업 ${d.lessons || 0}건)` : `Loaded (${d.students || 0} student${d.students === 1 ? "" : "s"}, ${d.lessons || 0} lesson${d.lessons === 1 ? "" : "s"})`;
         case "syncing": return a("syncSyncing");
         case "synced": return (/* @__PURE__ */ new Date()).toLocaleTimeString(ko ? "ko-KR" : "en-US", { hour: "numeric", minute: "2-digit" }) + " " + a("syncOk");
+        case "conflict": return ko ? "다른 기기에서 더 최신 Google Drive 데이터가 발견되었습니다. 불러오거나 현재 기기 데이터로 덮어쓰기를 선택하세요." : "Newer Google Drive data was found on another device. Load it or explicitly overwrite it with this device.";
       }
     }
     return String(e);
@@ -8536,14 +8663,27 @@ Content-Type: application/json\r
   }
   function k1({ isConnected: e, tokenExpired: t, auth: n, calEnabled: a, onToggleCalendar: l, calColorSource: calColor = "student", onCalColorSource: setCalColor, syncStatus: i, syncMsg: u, onSignIn: r, onSignOut: s, onSyncFromCloud: d, onSyncToCloud: p, students: m, lessons: f, folders: b = [], dark: T, onToggleDark: x, onRequestUnlock: N, onImportLocal: _importLocal }) {
     var ge, Ve;
-    let g = Qe(), c = et(), [v, y] = (0, z.useState)(false), [S, U] = (0, z.useState)(""), R = (F) => {
+    let g = Qe(), c = et(), [v, y] = (0, z.useState)(false), [S, U] = (0, z.useState)(""), [recoveryItems, setRecoveryItems] = (0, z.useState)([]), [storageInfo, setStorageInfo] = (0, z.useState)(null), refreshRecovery = () => _listRecoverySnapshots().then(setRecoveryItems), refreshStorage = (request = false) => _storageHealth(request).then(setStorageInfo), R = (F) => {
       r(F);
     }, w = (F) => {
       l(F), F && e && !(n != null && n.calScope) && _uiConfirm(c === "ko" ? `Google Calendar 동기화를 위해 Google 재로그인이 필요합니다.
 지금 진행할까요?` : `Re-login with Google Calendar permission?
 This is required for calendar sync.`).then((ok) => { if (ok) r(true); });
-    }, H = () => {
-      let F = URL.createObjectURL(new Blob([JSON.stringify({ version: gu, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), students: m, lessons: f, folders: b, settings: _collectBackupSettings() }, null, 2)], { type: "application/json" })), A = document.createElement("a");
+    }, makeRecovery = async () => {
+      let snap = await _saveRecoverySnapshot({ students: m, lessons: f, folders: b, settings: _collectBackupSettings(), syncMeta: _readDataMeta() }, "manual");
+      snap ? _uiNotice(c === "ko" ? "안전 복구본을 만들었습니다." : "Safety recovery snapshot created.") : _uiNotice(c === "ko" ? "복구본을 만들지 못했습니다." : "Could not create recovery snapshot.", "error");
+      refreshRecovery(); refreshStorage(false);
+    }, restoreRecovery = async (item) => {
+      if (!item || !item.data || !_importLocal) return;
+      let ok = await _uiConfirm(c === "ko" ? `${new Date(item.createdAt).toLocaleString("ko-KR")} 복구본으로 되돌릴까요? 현재 데이터도 복원 전에 자동 보관됩니다.` : `Restore the snapshot from ${new Date(item.createdAt).toLocaleString("en-US")}? Current data will be snapshotted first.`);
+      if (!ok) return;
+      await _importLocal(item.data.students, item.data.lessons, item.data.folders, item.data.settings, { source: "recovery" });
+      _uiNotice(c === "ko" ? "안전 복구본을 복원했습니다." : "Safety recovery snapshot restored.");
+      refreshRecovery();
+    };
+    (0, z.useEffect)(() => { refreshRecovery(); refreshStorage(false); }, []);
+    let H = () => {
+      let F = URL.createObjectURL(new Blob([JSON.stringify({ version: gu, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), students: m, lessons: f, folders: b, settings: _collectBackupSettings(), syncMeta: _readDataMeta() }, null, 2)], { type: "application/json" })), A = document.createElement("a");
       A.href = F, A.download = `mylesson_backup_${st(/* @__PURE__ */ new Date())}.json`, A.click(), setTimeout(() => URL.revokeObjectURL(F), 1e3);
     }, L = (F) => {
       let A = F.target.files[0];
@@ -8561,7 +8701,7 @@ This is required for calendar sync.`).then((ok) => { if (ok) r(true); });
       }, Y.readAsText(A);
     }, ce = ({ value: F, onChange: A, label: Y, sub: k }) => (0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 0", borderBottom: "1px solid var(--border)" }, children: [(0, o.jsxs)("div", { children: [(0, o.jsx)("div", { style: { fontSize: 14, fontWeight: 700, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: Y }), k && (0, o.jsx)("div", { style: { fontSize: 12, color: "var(--text-muted)", fontFamily: "'Noto Sans KR', sans-serif", marginTop: 2 }, children: k })] }), (0, o.jsx)("div", { onClick: () => A(!F), style: { width: 46, height: 26, borderRadius: 13, cursor: "pointer", transition: "background 0.2s", flexShrink: 0, background: F ? "var(--accent)" : "var(--border2)", position: "relative" }, children: (0, o.jsx)("div", { style: { position: "absolute", top: 3, left: F ? 22 : 3, width: 20, height: 20, borderRadius: "50%", background: "#fff", boxShadow: "0 1px 4px rgba(0,0,0,0.2)", transition: "left 0.2s" } }) })] });
     let colorChoice = a ? (0, o.jsxs)("div", { style: { marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }, children: [(0, o.jsx)("div", { style: { fontSize: 12, fontWeight: 800, color: "var(--text)", marginBottom: 7, fontFamily: "'Noto Sans KR', sans-serif" }, children: c === "ko" ? "캘린더 이벤트 색상" : "Calendar event color" }), (0, o.jsx)("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }, children: [["student", c === "ko" ? "학생 개별색" : "Student color"], ["folder", c === "ko" ? "폴더색" : "Folder color"]].map(([mode, label]) => (0, o.jsx)("button", { type: "button", onClick: () => setCalColor && setCalColor(mode), style: { padding: "9px 8px", borderRadius: 10, border: calColor === mode ? "1.5px solid var(--accent)" : "1px solid var(--border2)", background: calColor === mode ? "var(--accent-bg)" : "var(--surface)", color: calColor === mode ? "var(--accent)" : "var(--text-sub)", fontSize: 12, fontWeight: 800, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif" }, children: label }, mode)) }), (0, o.jsx)("div", { style: { marginTop: 7, fontSize: 11, lineHeight: 1.55, color: "var(--text-muted)", fontFamily: "'Noto Sans KR', sans-serif" }, children: c === "ko" ? "선택한 색과 가장 가까운 Google Calendar 이벤트 색을 사용합니다. 색이 없거나 폴더색 모드에서 폴더가 없는 학생은 Google Calendar 기본색을 사용합니다." : "Uses the closest Google Calendar event color. If no color is available, or a student has no folder in Folder color mode, Google Calendar's default event color is used." })] }) : null;
-    return (0, o.jsxs)("div", { className: "settings-view", children: [(0, o.jsxs)("div", { className: "app-card settings-card", style: { padding: "22px", marginBottom: 16 }, children: [(0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 13, marginBottom: 20 }, children: [(0, o.jsx)("div", { style: { width: 46, height: 46, borderRadius: 13, background: "linear-gradient(135deg,#4285f4 0%,#34a853 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }, children: "🔵" }), (0, o.jsxs)("div", { children: [(0, o.jsx)("div", { style: { fontSize: 16, fontWeight: 900, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: g("driveTitle") }), (0, o.jsx)("div", { style: { fontSize: 12, color: "var(--text-muted)", fontFamily: "'Noto Sans KR', sans-serif" }, children: g("driveFeature2") })] })] }), !e && (0, o.jsxs)("div", { children: [t && (n == null ? void 0 : n.email) && (0, o.jsxs)("div", { style: { background: "var(--red-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 16, border: "1.5px solid var(--red)44" }, children: [(0, o.jsx)("div", { style: { fontSize: 14, fontWeight: 800, color: "var(--red-text)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 6 }, children: g("driveExpired") }), (0, o.jsx)("div", { style: { fontSize: 12, color: "var(--text-sub)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 12 }, children: n.email }), (0, o.jsx)(P, { onClick: () => R(a), style: { width: "100%", textAlign: "center" }, children: g("reLoginBtn") })] }), !t && (0, o.jsxs)("div", { style: { background: "var(--blue-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 16, fontSize: 13, color: "var(--blue-text)", fontFamily: "'Noto Sans KR', sans-serif", lineHeight: 2 }, children: [(0, o.jsx)("strong", { style: { display: "block", marginBottom: 6, fontSize: 14 }, children: g("driveFeature1") }), (0, o.jsx)("div", { children: g("driveFeature2") }), (0, o.jsx)("div", { children: g("driveFeature3") }), (0, o.jsx)("div", { children: g("driveFeature4") })] }), (0, o.jsxs)("div", { style: { background: "var(--purple-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 16 }, children: [(0, o.jsx)(ce, { value: a, onChange: w, label: g("calTitle"), sub: g("calFeature1") }), colorChoice, a && (0, o.jsxs)("div", { style: { fontSize: 12, color: "var(--purple-text)", fontFamily: "'Noto Sans KR', sans-serif", marginTop: 8, lineHeight: 1.7 }, children: ["✓ ", g("calFeature2")] })] }), S && (0, o.jsxs)("div", { style: { background: "var(--red-bg)", border: "1.5px solid var(--red)44", borderRadius: 10, padding: "11px 14px", marginBottom: 14, fontSize: 13, color: "var(--red-text)", fontFamily: "'Noto Sans KR', sans-serif", lineHeight: 1.7, whiteSpace: "pre-wrap" }, children: ["⚠️ ", S] }), !t && (0, o.jsxs)("button", { onClick: () => R(a), style: { width: "100%", padding: "14px", borderRadius: 12, border: "1.5px solid var(--border2)", background: "var(--surface)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }, children: [(0, o.jsxs)("svg", { width: "20", height: "20", viewBox: "0 0 48 48", children: [(0, o.jsx)("path", { fill: "#EA4335", d: "M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" }), (0, o.jsx)("path", { fill: "#4285F4", d: "M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" }), (0, o.jsx)("path", { fill: "#FBBC05", d: "M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" }), (0, o.jsx)("path", { fill: "#34A853", d: "M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.35-8.16 2.35-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" })] }), (0, o.jsx)("span", { style: { fontSize: 15, fontWeight: 700, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: g("connectDrive") })] }), (0, o.jsx)("div", { style: { marginTop: 10, fontSize: 11, color: "var(--text-muted)", textAlign: "center", fontFamily: "'Noto Sans KR', sans-serif" }, children: c === "ko" ? "Google 인증창은 연결/재로그인 버튼을 눌렀을 때만 열립니다. 팝업이 차단되면 브라우저에서 허용해주세요." : "Google sign-in opens only after you tap Connect or Re-login. If blocked, allow pop-ups in the browser." })] }), e && (0, o.jsxs)("div", { children: [(0, o.jsxs)("div", { style: { background: "var(--green-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12 }, children: [(0, o.jsx)("div", { style: { width: 40, height: 40, borderRadius: "50%", background: "#4285f4", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 18, fontWeight: 900, flexShrink: 0 }, children: ((Ve = (ge = n == null ? void 0 : n.email) == null ? void 0 : ge[0]) == null ? void 0 : Ve.toUpperCase()) || "G" }), (0, o.jsxs)("div", { style: { flex: 1, minWidth: 0 }, children: [(0, o.jsx)("div", { style: { fontSize: 14, fontWeight: 800, color: "var(--green-text)", fontFamily: "'Noto Sans KR', sans-serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: (n == null ? void 0 : n.name) || (n == null ? void 0 : n.email) }), (0, o.jsxs)("div", { style: { fontSize: 12, color: "var(--green)", fontFamily: "'Noto Sans KR', sans-serif" }, children: [n == null ? void 0 : n.email, " · ", g("driveConnected")] })] }), (0, o.jsx)("div", { style: { width: 10, height: 10, borderRadius: "50%", flexShrink: 0, background: i === "ok" ? "#10b981" : i === "error" ? "#ef4444" : "#f59e0b", boxShadow: `0 0 0 3px ${i === "ok" ? "var(--green-bg)" : i === "error" ? "var(--red-bg)" : "var(--amber-bg)"}` } })] }), (0, o.jsxs)("div", { style: { background: "var(--surface2)", borderRadius: 10, padding: "11px 14px", marginBottom: 14, fontSize: 12, color: "var(--text-sub)", fontFamily: "'Noto Sans KR', sans-serif" }, children: [(0, o.jsx)("div", { style: { fontWeight: 700, color: "var(--text)", marginBottom: 3 }, children: g("syncOk") }), (0, o.jsx)("div", { children: _driveMsg(u, i, c, g) || "—" })] }), (0, o.jsxs)("div", { style: { background: "var(--purple-bg)", borderRadius: 12, padding: "4px 14px 12px", marginBottom: 14 }, children: [(0, o.jsx)(ce, { value: a, onChange: w, label: g("calTitle"), sub: a && (n != null && n.calScope) ? g("calFeature1") : a && !(n != null && n.calScope) ? "⚠ " + g("reLoginBtn") : c === "ko" ? "꺼짐" : "Off" }), colorChoice] }), a && e && n && n.calScope && (0, o.jsx)(_GcalCleanup, { lang: c }), a && e && !(n != null && n.calScope) && (0, o.jsxs)("div", { style: { background: "var(--amber-bg)", border: "1.5px solid var(--amber)44", borderRadius: 12, padding: "14px 16px", marginBottom: 14 }, children: [(0, o.jsxs)("div", { style: { fontSize: 13, fontWeight: 800, color: "var(--amber-text)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 6 }, children: g("calTitle") }), (0, o.jsx)("div", { style: { fontSize: 12, color: "var(--text-sub)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 10, lineHeight: 1.7 }, children: g("calFeature1") }), (0, o.jsx)(P, { onClick: () => r(true), style: { width: "100%", textAlign: "center", fontSize: 13 }, children: g("reLoginBtn") })] }), i === "conflict" && (0, o.jsxs)("div", { style: { background: "var(--amber-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 14, fontSize: 13, color: "var(--amber-text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: [(0, o.jsxs)("div", { style: { fontWeight: 800, marginBottom: 8 }, children: ["⚠️ ", c === "ko" ? "Google Drive에 기존 데이터가 있습니다" : "Existing data found on Google Drive"] }), (0, o.jsx)("div", { style: { fontSize: 12, marginBottom: 12 }, children: c === "ko" ? "어느 데이터를 사용할까요?" : "Which data would you like to use?" }), (0, o.jsxs)("div", { style: { display: "flex", gap: 8 }, children: [(0, o.jsxs)(P, { variant: "blue", style: { flex: 1, fontSize: 12, textAlign: "center" }, onClick: d, children: g("downloadData") }), (0, o.jsxs)(P, { variant: "green", style: { flex: 1, fontSize: 12, textAlign: "center" }, onClick: () => p(m, f, b), children: g("uploadData") })] })] }), (0, o.jsxs)("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }, children: [(0, o.jsxs)(P, { variant: "blue", style: { textAlign: "center", fontSize: 12, padding: "11px" }, onClick: d, children: g("downloadData") }), (0, o.jsx)(P, { variant: "green", style: { textAlign: "center", fontSize: 12, padding: "11px" }, onClick: () => p(m, f, b), children: g("uploadNow") })] }), (0, o.jsx)(P, { variant: "danger", onClick: s, style: { width: "100%", textAlign: "center" }, children: g("driveDisconnect") })] })] }), (0, o.jsxs)("div", { className: "app-card", style: { padding: "20px", marginBottom: 16 }, children: [(0, o.jsxs)("div", { style: { fontSize: 15, fontWeight: 800, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 14 }, children: c === "ko" ? "로컬 백업" : "Local Backup" }), (0, o.jsx)("div", { style: { fontSize: 11, color: "var(--text-muted)", lineHeight: 1.55, marginTop: -8, marginBottom: 12, fontFamily: "'Noto Sans KR', sans-serif" }, children: c === "ko" ? "학생·수업·폴더와 앱 환경설정을 함께 백업합니다. Google 로그인 정보와 앱 잠금 PIN은 포함하지 않습니다." : "Backs up students, lessons, folders, and app preferences together. Google sign-in data and the app-lock PIN are not included." }), (0, o.jsxs)("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }, children: [(0, o.jsxs)("button", { onClick: H, style: { padding: "14px", borderRadius: 12, border: "1.5px solid var(--border2)", background: "var(--surface2)", cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", fontSize: 13, fontWeight: 700, color: "var(--text)", textAlign: "center" }, children: ["📥 ", c === "ko" ? "JSON 내보내기" : "Export JSON"] }), (0, o.jsxs)("label", { style: { padding: "14px", borderRadius: 12, border: "1.5px solid var(--border2)", background: "var(--surface2)", cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", fontSize: 13, fontWeight: 700, color: "var(--text)", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center" }, children: ["📤 ", c === "ko" ? "JSON 가져오기" : "Import JSON", (0, o.jsx)("input", { type: "file", accept: ".json", onChange: L, style: { display: "none" } })] })] }), (0, o.jsxs)("div", { style: { marginTop: 9, fontSize: 12, color: "var(--text-muted)", fontFamily: "'Noto Sans KR', sans-serif" }, children: [g("count_students", m.length), " · ", g("count_lessons", f.length)] })] }), (0, o.jsx)(C1, { onRequestUnlock: N }), (0, o.jsx)(N1, {}), (0, o.jsxs)("div", { className: "app-card", style: { padding: "20px", marginBottom: 16 }, children: [(0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }, children: [(0, o.jsx)("div", { style: { width: 44, height: 44, borderRadius: 13, background: "var(--surface3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 }, children: "🎨" }), (0, o.jsx)("div", { children: (0, o.jsx)("div", { style: { fontSize: 15, fontWeight: 900, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: g("darkMode") }) })] }), (0, o.jsx)("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }, children: [{ val: false, icon: "☀️", label: c === "ko" ? "라이트 모드" : "Light Mode", sub: c === "ko" ? "밝고 선명한 화면" : "Bright & clear" }, { val: true, icon: "🌙", label: c === "ko" ? "다크 모드" : "Dark Mode", sub: c === "ko" ? "눈에 편안한 어두운 화면" : "Easy on the eyes" }].map(({ val: F, icon: A, label: Y, sub: k }) => (0, o.jsxs)("button", { onClick: () => x(F), style: { padding: "16px 12px", borderRadius: 14, cursor: "pointer", border: T === F ? "2px solid var(--accent)" : "1.5px solid var(--border2)", background: T === F ? "var(--accent-bg)" : "var(--surface2)", textAlign: "center", transition: "all 0.2s", boxShadow: T === F ? "0 0 0 3px var(--accent)22" : "none" }, children: [(0, o.jsx)("div", { style: { fontSize: 28, marginBottom: 6 }, children: A }), (0, o.jsx)("div", { style: { fontSize: 13, fontWeight: 800, color: T === F ? "var(--accent)" : "var(--text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: Y }), (0, o.jsx)("div", { style: { fontSize: 11, color: "var(--text-muted)", fontFamily: "'Noto Sans KR', sans-serif", marginTop: 3 }, children: k }), T === F && (0, o.jsxs)("div", { style: { marginTop: 8, fontSize: 11, color: "var(--accent)", fontWeight: 700, fontFamily: "'Noto Sans KR', sans-serif" }, children: ["✓ ", c === "ko" ? "현재 모드" : "Active"] })] }, String(F))) })] }), (0, o.jsxs)("div", { className: "app-card", style: { padding: "18px 20px" }, children: [(0, o.jsxs)("div", { style: { fontSize: 14, fontWeight: 800, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 10 }, children: ["ℹ️ ", c === "ko" ? "앱 정보" : "About"] }), (0, o.jsxs)("div", { style: { fontSize: 12, color: "var(--text-sub)", fontFamily: "'Noto Sans KR', sans-serif", lineHeight: 2.1 }, children: [(0, o.jsx)("div", { children: g("version", "2.2.17") }), (0, o.jsxs)("div", { children: c === "ko" ? "클라우드: Google Drive" : "Cloud: Google Drive" }), (0, o.jsxs)("div", { children: c === "ko" ? "캘린더: Google Calendar API" : "Calendar: Google Calendar API" }), (0, o.jsxs)("div", { children: c === "ko" ? "로컬: 브라우저 localStorage" : "Local: Browser localStorage" }), (0, o.jsxs)("div", { children: g("driveFeature4") })] }), (0, o.jsxs)("div", { style: { display: "flex", gap: 16, marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }, children: [(0, o.jsxs)("a", { href: "https://limfrog.github.io/mylesson/privacy.html", target: "_blank", rel: "noopener", style: { fontSize: 12, color: "var(--accent)", fontFamily: "'Noto Sans KR', sans-serif", fontWeight: 700, textDecoration: "none" }, children: c === "ko" ? "개인정보처리방침" : "Privacy Policy" }), (0, o.jsxs)("a", { href: "https://limfrog.github.io/mylesson/terms.html", target: "_blank", rel: "noopener", style: { fontSize: 12, color: "var(--accent)", fontFamily: "'Noto Sans KR', sans-serif", fontWeight: 700, textDecoration: "none" }, children: c === "ko" ? "서비스 이용약관" : "Terms of Service" })] })] })] });
+    return (0, o.jsxs)("div", { className: "settings-view", children: [(0, o.jsxs)("div", { className: "app-card settings-card", style: { padding: "22px", marginBottom: 16 }, children: [(0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 13, marginBottom: 20 }, children: [(0, o.jsx)("div", { style: { width: 46, height: 46, borderRadius: 13, background: "linear-gradient(135deg,#4285f4 0%,#34a853 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 }, children: "🔵" }), (0, o.jsxs)("div", { children: [(0, o.jsx)("div", { style: { fontSize: 16, fontWeight: 900, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: g("driveTitle") }), (0, o.jsx)("div", { style: { fontSize: 12, color: "var(--text-muted)", fontFamily: "'Noto Sans KR', sans-serif" }, children: g("driveFeature2") })] })] }), !e && (0, o.jsxs)("div", { children: [t && (n == null ? void 0 : n.email) && (0, o.jsxs)("div", { style: { background: "var(--red-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 16, border: "1.5px solid var(--red)44" }, children: [(0, o.jsx)("div", { style: { fontSize: 14, fontWeight: 800, color: "var(--red-text)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 6 }, children: g("driveExpired") }), (0, o.jsx)("div", { style: { fontSize: 12, color: "var(--text-sub)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 12 }, children: n.email }), (0, o.jsx)(P, { onClick: () => R(a), style: { width: "100%", textAlign: "center" }, children: g("reLoginBtn") })] }), !t && (0, o.jsxs)("div", { style: { background: "var(--blue-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 16, fontSize: 13, color: "var(--blue-text)", fontFamily: "'Noto Sans KR', sans-serif", lineHeight: 2 }, children: [(0, o.jsx)("strong", { style: { display: "block", marginBottom: 6, fontSize: 14 }, children: g("driveFeature1") }), (0, o.jsx)("div", { children: g("driveFeature2") }), (0, o.jsx)("div", { children: g("driveFeature3") }), (0, o.jsx)("div", { children: g("driveFeature4") })] }), (0, o.jsxs)("div", { style: { background: "var(--purple-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 16 }, children: [(0, o.jsx)(ce, { value: a, onChange: w, label: g("calTitle"), sub: g("calFeature1") }), colorChoice, a && (0, o.jsxs)("div", { style: { fontSize: 12, color: "var(--purple-text)", fontFamily: "'Noto Sans KR', sans-serif", marginTop: 8, lineHeight: 1.7 }, children: ["✓ ", g("calFeature2")] })] }), S && (0, o.jsxs)("div", { style: { background: "var(--red-bg)", border: "1.5px solid var(--red)44", borderRadius: 10, padding: "11px 14px", marginBottom: 14, fontSize: 13, color: "var(--red-text)", fontFamily: "'Noto Sans KR', sans-serif", lineHeight: 1.7, whiteSpace: "pre-wrap" }, children: ["⚠️ ", S] }), !t && (0, o.jsxs)("button", { onClick: () => R(a), style: { width: "100%", padding: "14px", borderRadius: 12, border: "1.5px solid var(--border2)", background: "var(--surface)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }, children: [(0, o.jsxs)("svg", { width: "20", height: "20", viewBox: "0 0 48 48", children: [(0, o.jsx)("path", { fill: "#EA4335", d: "M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" }), (0, o.jsx)("path", { fill: "#4285F4", d: "M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" }), (0, o.jsx)("path", { fill: "#FBBC05", d: "M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" }), (0, o.jsx)("path", { fill: "#34A853", d: "M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.35-8.16 2.35-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" })] }), (0, o.jsx)("span", { style: { fontSize: 15, fontWeight: 700, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: g("connectDrive") })] }), (0, o.jsx)("div", { style: { marginTop: 10, fontSize: 11, color: "var(--text-muted)", textAlign: "center", fontFamily: "'Noto Sans KR', sans-serif" }, children: c === "ko" ? "Google 인증창은 연결/재로그인 버튼을 눌렀을 때만 열립니다. 팝업이 차단되면 브라우저에서 허용해주세요." : "Google sign-in opens only after you tap Connect or Re-login. If blocked, allow pop-ups in the browser." })] }), e && (0, o.jsxs)("div", { children: [(0, o.jsxs)("div", { style: { background: "var(--green-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12 }, children: [(0, o.jsx)("div", { style: { width: 40, height: 40, borderRadius: "50%", background: "#4285f4", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 18, fontWeight: 900, flexShrink: 0 }, children: ((Ve = (ge = n == null ? void 0 : n.email) == null ? void 0 : ge[0]) == null ? void 0 : Ve.toUpperCase()) || "G" }), (0, o.jsxs)("div", { style: { flex: 1, minWidth: 0 }, children: [(0, o.jsx)("div", { style: { fontSize: 14, fontWeight: 800, color: "var(--green-text)", fontFamily: "'Noto Sans KR', sans-serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: (n == null ? void 0 : n.name) || (n == null ? void 0 : n.email) }), (0, o.jsxs)("div", { style: { fontSize: 12, color: "var(--green)", fontFamily: "'Noto Sans KR', sans-serif" }, children: [n == null ? void 0 : n.email, " · ", g("driveConnected")] })] }), (0, o.jsx)("div", { style: { width: 10, height: 10, borderRadius: "50%", flexShrink: 0, background: i === "ok" ? "#10b981" : i === "error" ? "#ef4444" : "#f59e0b", boxShadow: `0 0 0 3px ${i === "ok" ? "var(--green-bg)" : i === "error" ? "var(--red-bg)" : "var(--amber-bg)"}` } })] }), (0, o.jsxs)("div", { style: { background: "var(--surface2)", borderRadius: 10, padding: "11px 14px", marginBottom: 14, fontSize: 12, color: "var(--text-sub)", fontFamily: "'Noto Sans KR', sans-serif" }, children: [(0, o.jsx)("div", { style: { fontWeight: 700, color: "var(--text)", marginBottom: 3 }, children: g("syncOk") }), (0, o.jsx)("div", { children: _driveMsg(u, i, c, g) || "—" })] }), (0, o.jsxs)("div", { style: { background: "var(--purple-bg)", borderRadius: 12, padding: "4px 14px 12px", marginBottom: 14 }, children: [(0, o.jsx)(ce, { value: a, onChange: w, label: g("calTitle"), sub: a && (n != null && n.calScope) ? g("calFeature1") : a && !(n != null && n.calScope) ? "⚠ " + g("reLoginBtn") : c === "ko" ? "꺼짐" : "Off" }), colorChoice] }), a && e && n && n.calScope && (0, o.jsx)(_GcalCleanup, { lang: c }), a && e && !(n != null && n.calScope) && (0, o.jsxs)("div", { style: { background: "var(--amber-bg)", border: "1.5px solid var(--amber)44", borderRadius: 12, padding: "14px 16px", marginBottom: 14 }, children: [(0, o.jsxs)("div", { style: { fontSize: 13, fontWeight: 800, color: "var(--amber-text)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 6 }, children: g("calTitle") }), (0, o.jsx)("div", { style: { fontSize: 12, color: "var(--text-sub)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 10, lineHeight: 1.7 }, children: g("calFeature1") }), (0, o.jsx)(P, { onClick: () => r(true), style: { width: "100%", textAlign: "center", fontSize: 13 }, children: g("reLoginBtn") })] }), i === "conflict" && (0, o.jsxs)("div", { style: { background: "var(--amber-bg)", borderRadius: 12, padding: "14px 16px", marginBottom: 14, fontSize: 13, color: "var(--amber-text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: [(0, o.jsxs)("div", { style: { fontWeight: 800, marginBottom: 8 }, children: ["⚠️ ", c === "ko" ? "Google Drive에 기존 데이터가 있습니다" : "Existing data found on Google Drive"] }), (0, o.jsx)("div", { style: { fontSize: 12, marginBottom: 12 }, children: c === "ko" ? "어느 데이터를 사용할까요?" : "Which data would you like to use?" }), (0, o.jsxs)("div", { style: { display: "flex", gap: 8 }, children: [(0, o.jsxs)(P, { variant: "blue", style: { flex: 1, fontSize: 12, textAlign: "center" }, onClick: d, children: g("downloadData") }), (0, o.jsxs)(P, { variant: "green", style: { flex: 1, fontSize: 12, textAlign: "center" }, onClick: () => p(m, f, b, true), children: g("uploadData") })] })] }), (0, o.jsxs)("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }, children: [(0, o.jsxs)(P, { variant: "blue", style: { textAlign: "center", fontSize: 12, padding: "11px" }, onClick: d, children: g("downloadData") }), (0, o.jsx)(P, { variant: "green", style: { textAlign: "center", fontSize: 12, padding: "11px" }, onClick: () => p(m, f, b), children: g("uploadNow") })] }), (0, o.jsx)(P, { variant: "danger", onClick: s, style: { width: "100%", textAlign: "center" }, children: g("driveDisconnect") })] })] }), (0, o.jsxs)("div", { className: "app-card", style: { padding: "20px", marginBottom: 16 }, children: [(0, o.jsx)("div", { style: { fontSize: 15, fontWeight: 800, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 6 }, children: c === "ko" ? "데이터 안전" : "Data Safety" }), (0, o.jsx)("div", { style: { fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, marginBottom: 12 }, children: c === "ko" ? "데이터를 덮어쓰기 전 자동 복구본을 만들고 최근 10개를 기기에 보관합니다." : "Keeps up to 10 on-device recovery snapshots and creates one before destructive replacements." }), storageInfo && (0, o.jsxs)("div", { style: { background: "var(--surface2)", borderRadius: 10, padding: "10px 12px", marginBottom: 10, fontSize: 12, color: "var(--text-sub)", lineHeight: 1.6 }, children: [(0, o.jsxs)("div", { children: [c === "ko" ? "저장소 보호: " : "Persistent storage: ", storageInfo.persisted === true ? c === "ko" ? "활성" : "On" : storageInfo.persisted === false ? c === "ko" ? "미활성" : "Off" : c === "ko" ? "확인 불가" : "Unknown"] }), storageInfo.quota > 0 && (0, o.jsxs)("div", { children: [c === "ko" ? "사용량: " : "Usage: ", _formatStorageBytes(storageInfo.usage), " / ", _formatStorageBytes(storageInfo.quota), ` (${storageInfo.percent.toFixed(1)}%)`] })] }), (0, o.jsxs)("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }, children: [(0, o.jsx)(P, { variant: "blue", onClick: makeRecovery, style: { textAlign: "center", fontSize: 12 }, children: c === "ko" ? "지금 복구본 만들기" : "Create Snapshot" }), (0, o.jsx)(P, { variant: "subtle", onClick: () => refreshStorage(true), style: { textAlign: "center", fontSize: 12 }, children: c === "ko" ? "저장소 보호 요청" : "Protect Storage" })] }), recoveryItems.length ? (0, o.jsx)("div", { style: { display: "flex", flexDirection: "column", gap: 7 }, children: recoveryItems.slice(0, 5).map((item) => (0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "9px 10px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface)" }, children: [(0, o.jsxs)("div", { style: { minWidth: 0 }, children: [(0, o.jsx)("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--text)" }, children: new Date(item.createdAt).toLocaleString(c === "ko" ? "ko-KR" : "en-US") }), (0, o.jsx)("div", { style: { fontSize: 10, color: "var(--text-muted)", marginTop: 2 }, children: item.reason || "auto" })] }), (0, o.jsx)(P, { variant: "warning", onClick: () => restoreRecovery(item), style: { fontSize: 11, padding: "7px 10px", flexShrink: 0 }, children: c === "ko" ? "복원" : "Restore" })] }, item.id)) }) : (0, o.jsx)("div", { style: { fontSize: 11, color: "var(--text-muted)" }, children: c === "ko" ? "아직 안전 복구본이 없습니다." : "No safety snapshots yet." })] }), (0, o.jsxs)("div", { className: "app-card", style: { padding: "20px", marginBottom: 16 }, children: [(0, o.jsxs)("div", { style: { fontSize: 15, fontWeight: 800, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 14 }, children: c === "ko" ? "로컬 백업" : "Local Backup" }), (0, o.jsx)("div", { style: { fontSize: 11, color: "var(--text-muted)", lineHeight: 1.55, marginTop: -8, marginBottom: 12, fontFamily: "'Noto Sans KR', sans-serif" }, children: c === "ko" ? "학생·수업·폴더와 앱 환경설정을 함께 백업합니다. Google 로그인 정보와 앱 잠금 PIN은 포함하지 않습니다." : "Backs up students, lessons, folders, and app preferences together. Google sign-in data and the app-lock PIN are not included." }), (0, o.jsxs)("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }, children: [(0, o.jsxs)("button", { onClick: H, style: { padding: "14px", borderRadius: 12, border: "1.5px solid var(--border2)", background: "var(--surface2)", cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", fontSize: 13, fontWeight: 700, color: "var(--text)", textAlign: "center" }, children: ["📥 ", c === "ko" ? "JSON 내보내기" : "Export JSON"] }), (0, o.jsxs)("label", { style: { padding: "14px", borderRadius: 12, border: "1.5px solid var(--border2)", background: "var(--surface2)", cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", fontSize: 13, fontWeight: 700, color: "var(--text)", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center" }, children: ["📤 ", c === "ko" ? "JSON 가져오기" : "Import JSON", (0, o.jsx)("input", { type: "file", accept: ".json", onChange: L, style: { display: "none" } })] })] }), (0, o.jsxs)("div", { style: { marginTop: 9, fontSize: 12, color: "var(--text-muted)", fontFamily: "'Noto Sans KR', sans-serif" }, children: [g("count_students", m.length), " · ", g("count_lessons", f.length)] })] }), (0, o.jsx)(C1, { onRequestUnlock: N }), (0, o.jsx)(N1, {}), (0, o.jsxs)("div", { className: "app-card", style: { padding: "20px", marginBottom: 16 }, children: [(0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }, children: [(0, o.jsx)("div", { style: { width: 44, height: 44, borderRadius: 13, background: "var(--surface3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 }, children: "🎨" }), (0, o.jsx)("div", { children: (0, o.jsx)("div", { style: { fontSize: 15, fontWeight: 900, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: g("darkMode") }) })] }), (0, o.jsx)("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }, children: [{ val: false, icon: "☀️", label: c === "ko" ? "라이트 모드" : "Light Mode", sub: c === "ko" ? "밝고 선명한 화면" : "Bright & clear" }, { val: true, icon: "🌙", label: c === "ko" ? "다크 모드" : "Dark Mode", sub: c === "ko" ? "눈에 편안한 어두운 화면" : "Easy on the eyes" }].map(({ val: F, icon: A, label: Y, sub: k }) => (0, o.jsxs)("button", { onClick: () => x(F), style: { padding: "16px 12px", borderRadius: 14, cursor: "pointer", border: T === F ? "2px solid var(--accent)" : "1.5px solid var(--border2)", background: T === F ? "var(--accent-bg)" : "var(--surface2)", textAlign: "center", transition: "all 0.2s", boxShadow: T === F ? "0 0 0 3px var(--accent)22" : "none" }, children: [(0, o.jsx)("div", { style: { fontSize: 28, marginBottom: 6 }, children: A }), (0, o.jsx)("div", { style: { fontSize: 13, fontWeight: 800, color: T === F ? "var(--accent)" : "var(--text)", fontFamily: "'Noto Sans KR', sans-serif" }, children: Y }), (0, o.jsx)("div", { style: { fontSize: 11, color: "var(--text-muted)", fontFamily: "'Noto Sans KR', sans-serif", marginTop: 3 }, children: k }), T === F && (0, o.jsxs)("div", { style: { marginTop: 8, fontSize: 11, color: "var(--accent)", fontWeight: 700, fontFamily: "'Noto Sans KR', sans-serif" }, children: ["✓ ", c === "ko" ? "현재 모드" : "Active"] })] }, String(F))) })] }), (0, o.jsxs)("div", { className: "app-card", style: { padding: "18px 20px" }, children: [(0, o.jsxs)("div", { style: { fontSize: 14, fontWeight: 800, color: "var(--text)", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 10 }, children: ["ℹ️ ", c === "ko" ? "앱 정보" : "About"] }), (0, o.jsxs)("div", { style: { fontSize: 12, color: "var(--text-sub)", fontFamily: "'Noto Sans KR', sans-serif", lineHeight: 2.1 }, children: [(0, o.jsx)("div", { children: g("version", "2.5.0") }), (0, o.jsxs)("div", { children: c === "ko" ? "클라우드: Google Drive" : "Cloud: Google Drive" }), (0, o.jsxs)("div", { children: c === "ko" ? "캘린더: Google Calendar API" : "Calendar: Google Calendar API" }), (0, o.jsxs)("div", { children: c === "ko" ? "로컬: 브라우저 저장소 (localStorage + IndexedDB)" : "Local: Browser storage (localStorage + IndexedDB)" }), (0, o.jsxs)("div", { children: g("driveFeature4") })] }), (0, o.jsxs)("div", { style: { display: "flex", gap: 16, marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }, children: [(0, o.jsxs)("a", { href: "https://limfrog.github.io/mylesson/privacy.html", target: "_blank", rel: "noopener", style: { fontSize: 12, color: "var(--accent)", fontFamily: "'Noto Sans KR', sans-serif", fontWeight: 700, textDecoration: "none" }, children: c === "ko" ? "개인정보처리방침" : "Privacy Policy" }), (0, o.jsxs)("a", { href: "https://limfrog.github.io/mylesson/terms.html", target: "_blank", rel: "noopener", style: { fontSize: 12, color: "var(--accent)", fontFamily: "'Noto Sans KR', sans-serif", fontWeight: 700, textDecoration: "none" }, children: c === "ko" ? "서비스 이용약관" : "Terms of Service" })] })] })] });
   }
   function Rm({ value: e, onChange: t }) {
     let n = (S) => {
@@ -9109,37 +9249,19 @@ This is required for calendar sync.`).then((ok) => { if (ok) r(true); });
     var zc;
     let [e, t] = (0, z.useState)(r1), n = uc(e), a = (h) => {
       t(h), localStorage.setItem(Mm, h);
-    }, [l, i] = (0, z.useState)(0), [u, r] = (0, z.useState)(() => {
-      try {
-        return _normStudents(JSON.parse(localStorage.getItem("students") || "[]"));
-      } catch (h) {
-        return [];
-      }
-    }), [s, d] = (0, z.useState)(() => {
-      try {
-        return _normLessons(JSON.parse(localStorage.getItem("lessons") || "[]"));
-      } catch (h) {
-        return [];
-      }
-    }), [p, m] = (0, z.useState)(false), [f, b] = (0, z.useState)(null), [T, x] = (0, z.useState)(null), [N, g] = (0, z.useState)(false), [c, v] = (0, z.useState)(null), [y, S] = (0, z.useState)(null), [U, R] = (0, z.useState)(""), [w, H] = (0, z.useState)(""), [L, ce] = (0, z.useState)(() => localStorage.getItem("lesson_sort") || "date"), [ge, Ve] = (0, z.useState)(() => localStorage.getItem("lesson_density") || "normal"), [F, A] = (0, z.useState)(() => localStorage.getItem("lesson_folder_view") === "true"), [Y, k] = (0, z.useState)(() => {
+    }, [l, i] = (0, z.useState)(0), [u, r] = (0, z.useState)(() => _readLocalArray("students", _normStudents)), [s, d] = (0, z.useState)(() => _readLocalArray("lessons", _normLessons)), [p, m] = (0, z.useState)(false), [f, b] = (0, z.useState)(null), [T, x] = (0, z.useState)(null), [N, g] = (0, z.useState)(false), [c, v] = (0, z.useState)(null), [y, S] = (0, z.useState)(null), [U, R] = (0, z.useState)(""), [w, H] = (0, z.useState)(""), [L, ce] = (0, z.useState)(() => localStorage.getItem("lesson_sort") || "date"), [ge, Ve] = (0, z.useState)(() => localStorage.getItem("lesson_density") || "normal"), [F, A] = (0, z.useState)(() => localStorage.getItem("lesson_folder_view") === "true"), [Y, k] = (0, z.useState)(() => {
       try {
         return JSON.parse(localStorage.getItem("lesson_collapsed_folders") || "[]");
       } catch (h) {
         return [];
       }
-    }), [C, K] = (0, z.useState)(() => localStorage.getItem("student_sort") || "name"), [W, ee] = (0, z.useState)(() => localStorage.getItem("card_density") || "normal"), [_, Z] = (0, z.useState)(() => localStorage.getItem("folder_view") === "true"), [q, Me] = (0, z.useState)(() => {
-      try {
-        return _normFolders(JSON.parse(localStorage.getItem("student_folders") || "[]"));
-      } catch (h) {
-        return [];
-      }
-    }), [Jt, $] = (0, z.useState)(() => {
+    }), [C, K] = (0, z.useState)(() => localStorage.getItem("student_sort") || "name"), [W, ee] = (0, z.useState)(() => localStorage.getItem("card_density") || "normal"), [_, Z] = (0, z.useState)(() => localStorage.getItem("folder_view") === "true"), [q, Me] = (0, z.useState)(() => _readLocalArray("student_folders", _normFolders)), [Jt, $] = (0, z.useState)(() => {
       try {
         return JSON.parse(localStorage.getItem("collapsed_folders") || "[]");
       } catch (h) {
         return [];
       }
-    }), [je, we] = (0, z.useState)(false), [wt, Xe] = (0, z.useState)(false), [arView, setArView] = (0, z.useState)(false), [arSel, setArSel] = (0, z.useState)([]), [Kt, $t] = (0, z.useState)(() => localStorage.getItem(ml) === "true" && !!localStorage.getItem(Jn)), [Sn, vl] = (0, z.useState)(null), $n = (0, z.useRef)(null);
+    }), [je, we] = (0, z.useState)(false), [wt, Xe] = (0, z.useState)(false), [arView, setArView] = (0, z.useState)(false), [arSel, setArSel] = (0, z.useState)([]), [Kt, $t] = (0, z.useState)(() => localStorage.getItem(ml) === "true" && !!localStorage.getItem(Jn)), [Sn, vl] = (0, z.useState)(null), $n = (0, z.useRef)(null), _replaceFromCloudRef = (0, z.useRef)(false);
     (0, z.useEffect)(() => {
       if (localStorage.getItem(ml) !== "true") return;
       let h = () => {
@@ -9168,16 +9290,35 @@ This is required for calendar sync.`).then((ok) => { if (ok) r(true); });
     (0, z.useEffect)(() => {
       document.documentElement.setAttribute("data-theme", Ci ? "dark" : "light"), document.body.style.background = Ci ? "#0f0f13" : "#f7f7fb";
     }, []);
-    let Ym = (0, z.useCallback)((h, E, M = [], settings = null) => {
+    let Ym = (0, z.useCallback)(async (h, E, M = [], settings = null, options = {}) => {
       let nd = _normBackup({ version: gu, students: h, lessons: E, folders: M, settings });
-      if (!nd) return;
+      if (!nd) return false;
+      if (!options.skipSnapshot) await _saveRecoverySnapshot({ students: u, lessons: s, folders: q, settings: _collectBackupSettings(), syncMeta: _readDataMeta() }, options.source === "cloud" ? "before_cloud_replace" : "before_replace");
+      if (options.source === "cloud") _replaceFromCloudRef.current = true;
       let photoJob = _replaceStudentPhotos(nd.students);
-      r(nd.students), d(nd.lessons), Me(nd.folders), localStorage.setItem("students", JSON.stringify(_studentsForLocal(nd.students))), localStorage.setItem("lessons", JSON.stringify(nd.lessons)), localStorage.setItem("student_folders", JSON.stringify(nd.folders));
+      r(nd.students), d(nd.lessons), Me(nd.folders);
+      let ok1 = _safeStoreJSON("students", _studentsForLocal(nd.students), "학생 데이터"), ok2 = _safeStoreJSON("lessons", nd.lessons, "수업 데이터"), ok3 = _safeStoreJSON("student_folders", nd.folders, "폴더 데이터");
+      options.source === "cloud" ? _setDataDirty(false) : _setDataDirty(true);
+      if (!(ok1 && ok2 && ok3)) await _saveRecoverySnapshot({ students: nd.students, lessons: nd.lessons, folders: nd.folders, settings: nd.settings || _collectBackupSettings() }, "local_storage_error");
       if (nd.settings && _applyBackupSettings(nd.settings)) {
         _uiNotice((nd.settings.language || e) === "ko" ? "백업 복원 완료 · 환경설정을 적용합니다" : "Backup restored · Applying app preferences");
         Promise.resolve(photoJob).finally(() => setTimeout(() => window.location.reload(), 450));
       }
-    }, [e]), { isConnected: ki, auth: De, tokenExpired: gc, calEnabled: Pn, toggleCalendar: Zm, calColorSource: gcalColorSource, setCalColorSource: setGcalColorSource, syncStatus: mc, syncMsg: pc, handleSignIn: vc, signOut: qm, syncToCloud: yc, syncFromCloud: Qm, scheduleSync: Xm, syncLessonToCalendar: yu, syncScheduleToCalendar: yl, syncDeleteInstanceToCalendar: Fm } = p1({ students: u, lessons: s, folders: q, onLoadCloud: Ym });
+      return true;
+    }, [e, u, s, q]), { isConnected: ki, auth: De, tokenExpired: gc, calEnabled: Pn, toggleCalendar: Zm, calColorSource: gcalColorSource, setCalColorSource: setGcalColorSource, syncStatus: mc, syncMsg: pc, handleSignIn: vc, signOut: qm, syncToCloud: yc, syncFromCloud: Qm, scheduleSync: Xm, syncLessonToCalendar: yu, syncScheduleToCalendar: yl, syncDeleteInstanceToCalendar: Fm } = p1({ students: u, lessons: s, folders: q, onLoadCloud: Ym });
+    (0, z.useEffect)(() => {
+      if (!_localDataCorrupt) return;
+      _latestRecoverySnapshot().then(async (snap) => {
+        if (!(snap != null && snap.data)) {
+          _uiNotice(e === "ko" ? "로컬 데이터가 손상되었고 복구본을 찾지 못했습니다." : "Local data is corrupted and no recovery snapshot was found.", "error");
+          return;
+        }
+        await Ym(snap.data.students, snap.data.lessons, snap.data.folders, snap.data.settings, { source: "recovery", skipSnapshot: true });
+        _localDataCorrupt = false;
+        _uiNotice(e === "ko" ? "손상된 로컬 데이터 대신 최근 안전 복구본을 복원했습니다." : "Recovered the latest safety snapshot after local data corruption.");
+      });
+    }, []);
+    (0, z.useEffect)(() => { _storageHealth(true).catch(() => {}); }, []);
     (0, z.useEffect)(() => {
       _gcalCleanupHandler = async (pr) => {
         let tk = Pn && De && De.accessToken;
@@ -9228,9 +9369,9 @@ This is required for calendar sync.`).then((ok) => { if (ok) r(true); });
       _hydrateStudentPhotos(u).then((hh) => { if (hh.some((q,ix) => q.photo && !u[ix]?.photo)) r(hh); });
     }, []);
     (0, z.useEffect)(() => {
-      _saveStudentPhotos(u), localStorage.setItem("students", JSON.stringify(_studentsForLocal(u)));
+      _saveStudentPhotos(u); let ok = _safeStoreJSON("students", _studentsForLocal(u), "학생 데이터"); if (!ok) _saveRecoverySnapshot({ students: u, lessons: s, folders: q, settings: _collectBackupSettings() }, "local_storage_error");
     }, [u]), (0, z.useEffect)(() => {
-      localStorage.setItem("lessons", JSON.stringify(s));
+      let ok = _safeStoreJSON("lessons", s, "수업 데이터"); if (!ok) _saveRecoverySnapshot({ students: u, lessons: s, folders: q, settings: _collectBackupSettings() }, "local_storage_error");
     }, [s]);
     let bc = (0, z.useRef)(true);
     (0, z.useEffect)(() => {
@@ -9238,7 +9379,11 @@ This is required for calendar sync.`).then((ok) => { if (ok) r(true); });
         bc.current = false;
         return;
       }
-      Xm(u, s, q);
+      if (_replaceFromCloudRef.current) {
+        _replaceFromCloudRef.current = false, _setDataDirty(false);
+        return;
+      }
+      _setDataDirty(true), _touchDataMeta(), Xm(u, s, q);
     }, [u, s, q]);
     let _studentSaveLock = (0, z.useRef)(false), [Di, xt] = (0, z.useState)(""), Wm = async (h) => {
       var B;
@@ -9338,7 +9483,7 @@ This is required for calendar sync.`).then((ok) => { if (ok) r(true); });
       }));
       setArSel([]), xt(e === "ko" ? `${ids.length}명의 학생을 되돌렸습니다.` : `Restored ${ids.length} student(s).`), setTimeout(() => xt(""), 2500);
     }, bu = (h) => {
-      Me(h), localStorage.setItem("student_folders", JSON.stringify(h));
+      Me(h); if (!_safeStoreJSON("student_folders", h, "폴더 데이터")) _saveRecoverySnapshot({ students: u, lessons: s, folders: h, settings: _collectBackupSettings() }, "local_storage_error");
     }, Vm = (h) => {
       let E = [...q, { id: zi(), name: h.trim(), color: zm[q.length % zm.length] }];
       bu(E);
@@ -9497,7 +9642,7 @@ This is required for calendar sync.`).then((ok) => { if (ok) r(true); });
       let M = u.find((B) => B.id === h.studentId), O = u.find((B) => B.id === E.studentId);
       return L === "name" ? ((M == null ? void 0 : M.name) || "").localeCompare((O == null ? void 0 : O.name) || "", "ko") : L === "group" ? ((M == null ? void 0 : M.group) || "zzz").localeCompare((O == null ? void 0 : O.group) || "zzz", "ko") : L === "major" ? ((M == null ? void 0 : M.major) || "zzz").localeCompare((O == null ? void 0 : O.major) || "zzz", "ko") : L === "fee" ? (E.feePaid ? 1 : 0) - (h.feePaid ? 1 : 0) : E.date.localeCompare(h.date);
     }), xc = O1(), ct = xc >= 768, hu = xc >= 1200;
-    return (0, o.jsx)(Bm.Provider, { value: e, children: (0, o.jsx)(mu.Provider, { value: { dark: Ci }, children: (0, o.jsxs)(o.Fragment, { children: [Kt && (0, o.jsx)(T1, { onUnlock: Ni }), (0, o.jsxs)("div", { className: "app-wrap", style: { fontFamily: "-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif", maxWidth: ct ? void 0 : 540, margin: ct ? void 0 : "0 auto", filter: Kt ? "blur(8px) brightness(0.5)" : "none", pointerEvents: Kt ? "none" : "auto", userSelect: Kt ? "none" : "auto" }, children: [(0, o.jsx)("div", { className: "app-header", style: { padding: "max(16px, calc(env(safe-area-inset-top, 0px) + 12px)) 20px 18px", color: "#fff" }, children: (0, o.jsxs)("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" }, children: [(0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [ct && (0, o.jsx)("img", { src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIiB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJnR3JhZCIgeDE9IjAlIiB5MT0iMCUiIHgyPSIxMDAlIiB5Mj0iMTAwJSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiM2MzY2ZjEiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdHlsZT0ic3RvcC1jb2xvcjojOGI1Y2Y2Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJwYXBlckdyYWQiIHgxPSIwJSIgeTE9IjAlIiB4Mj0iMCUiIHkyPSIxMDAlIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwJSIgc3R5bGU9InN0b3AtY29sb3I6I2ZmZmZmZjtzdG9wLW9wYWNpdHk6MSIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEwMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiNmNWYzZmY7c3RvcC1vcGFjaXR5OjEiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8ZmlsdGVyIGlkPSJzaGFkb3ciIHg9Ii0xMCUiIHk9Ii0xMCUiIHdpZHRoPSIxMjAlIiBoZWlnaHQ9IjEzMCUiPgogICAgICA8ZmVEcm9wU2hhZG93IGR4PSIwIiBkeT0iOCIgc3RkRGV2aWF0aW9uPSIxMiIgZmxvb2QtY29sb3I9IiM0MzM4Y2EiIGZsb29kLW9wYWNpdHk9IjAuMzUiLz4KICAgIDwvZmlsdGVyPgogICAgPGZpbHRlciBpZD0ic29mdFNoYWRvdyIgeD0iLTUlIiB5PSItNSUiIHdpZHRoPSIxMTUlIiBoZWlnaHQ9IjEyMCUiPgogICAgICA8ZmVEcm9wU2hhZG93IGR4PSIwIiBkeT0iMyIgc3RkRGV2aWF0aW9uPSI1IiBmbG9vZC1jb2xvcj0iIzAwMCIgZmxvb2Qtb3BhY2l0eT0iMC4xMiIvPgogICAgPC9maWx0ZXI+CiAgICA8Y2xpcFBhdGggaWQ9InJvdW5kZWRDbGlwIj4KICAgICAgPHJlY3QgeD0iNTYiIHk9IjU2IiB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgcng9Ijk2IiByeT0iOTYiLz4KICAgIDwvY2xpcFBhdGg+CiAgPC9kZWZzPgogIDxyZWN0IHg9IjU2IiB5PSI1NiIgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIHJ4PSI5NiIgcnk9Ijk2IiBmaWxsPSJ1cmwoI2JnR3JhZCkiIGZpbHRlcj0idXJsKCNzaGFkb3cpIi8+CiAgPGNpcmNsZSBjeD0iNDIwIiBjeT0iMTMwIiByPSI4MCIgZmlsbD0id2hpdGUiIGZpbGwtb3BhY2l0eT0iMC4wNiIgY2xpcC1wYXRoPSJ1cmwoI3JvdW5kZWRDbGlwKSIvPgogIDxjaXJjbGUgY3g9IjEwMCIgY3k9IjM5MCIgcj0iMTAwIiBmaWxsPSJ3aGl0ZSIgZmlsbC1vcGFjaXR5PSIwLjA1IiBjbGlwLXBhdGg9InVybCgjcm91bmRlZENsaXApIi8+CiAgPHJlY3QgeD0iMTQ4IiB5PSIxMzYiIHdpZHRoPSIyMTYiIGhlaWdodD0iMjY0IiByeD0iMTQiIHJ5PSIxNCIgZmlsbD0idXJsKCNwYXBlckdyYWQpIiBmaWx0ZXI9InVybCgjc29mdFNoYWRvdykiLz4KICA8bGluZSB4MT0iMTg2IiB5MT0iMTUwIiB4Mj0iMTg2IiB5Mj0iMzg2IiBzdHJva2U9IiNmY2E1YTUiIHN0cm9rZS13aWR0aD0iMi41IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMTg4IiB4Mj0iMzQ4IiB5Mj0iMTg4IiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMjE0IiB4Mj0iMzQ4IiB5Mj0iMjE0IiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMjQwIiB4Mj0iMzQ4IiB5Mj0iMjQwIiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMjY2IiB4Mj0iMzQ4IiB5Mj0iMjY2IiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMjkyIiB4Mj0iMzQ4IiB5Mj0iMjkyIiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMzE4IiB4Mj0iMzQ4IiB5Mj0iMzE4IiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8cmVjdCB4PSIxOTYiIHk9IjE3OCIgd2lkdGg9IjExMCIgaGVpZ2h0PSI4IiByeD0iNCIgZmlsbD0iIzYzNjZmMSIgb3BhY2l0eT0iMC44NSIvPgogIDxyZWN0IHg9IjE5NiIgeT0iMjA0IiB3aWR0aD0iMTQwIiBoZWlnaHQ9IjYiIHJ4PSIzIiBmaWxsPSIjOWNhM2FmIiBvcGFjaXR5PSIwLjciLz4KICA8cmVjdCB4PSIxOTYiIHk9IjIzMCIgd2lkdGg9IjEyMCIgaGVpZ2h0PSI2IiByeD0iMyIgZmlsbD0iIzljYTNhZiIgb3BhY2l0eT0iMC43Ii8+CiAgPHJlY3QgeD0iMTk2IiB5PSIyNTYiIHdpZHRoPSIxMzAiIGhlaWdodD0iNiIgcng9IjMiIGZpbGw9IiM5Y2EzYWYiIG9wYWNpdHk9IjAuNyIvPgogIDxyZWN0IHg9IjE5NiIgeT0iMjgyIiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjYiIHJ4PSIzIiBmaWxsPSIjOWNhM2FmIiBvcGFjaXR5PSIwLjciLz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyOTYsIDMwMCkiIGZpbHRlcj0idXJsKCNzb2Z0U2hhZG93KSI+CiAgICA8Y2lyY2xlIGN4PSIzNiIgY3k9IjM2IiByPSIzNiIgZmlsbD0iIzYzNjZmMSIvPgogICAgPGVsbGlwc2UgY3g9IjI4IiBjeT0iNDYiIHJ4PSI5IiByeT0iNyIgZmlsbD0id2hpdGUiIHRyYW5zZm9ybT0icm90YXRlKC0xNSwgMjgsIDQ2KSIvPgogICAgPHJlY3QgeD0iMzYiIHk9IjIwIiB3aWR0aD0iNCIgaGVpZ2h0PSIyOCIgcng9IjIiIGZpbGw9IndoaXRlIi8+CiAgICA8cGF0aCBkPSJNNDAgMjAgUTUyIDI2IDQ4IDM2IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgPC9nPgogIDxjaXJjbGUgY3g9IjIxNiIgY3k9IjE0OCIgcj0iNyIgZmlsbD0iI2U1ZTdlYiIvPgogIDxjaXJjbGUgY3g9IjI1NiIgY3k9IjE0OCIgcj0iNyIgZmlsbD0iI2U1ZTdlYiIvPgogIDxjaXJjbGUgY3g9IjI5NiIgY3k9IjE0OCIgcj0iNyIgZmlsbD0iI2U1ZTdlYiIvPgogIDxjaXJjbGUgY3g9IjIxNiIgY3k9IjE0OCIgcj0iNCIgZmlsbD0idXJsKCNiZ0dyYWQpIi8+CiAgPGNpcmNsZSBjeD0iMjU2IiBjeT0iMTQ4IiByPSI0IiBmaWxsPSJ1cmwoI2JnR3JhZCkiLz4KICA8Y2lyY2xlIGN4PSIyOTYiIGN5PSIxNDgiIHI9IjQiIGZpbGw9InVybCgjYmdHcmFkKSIvPgo8L3N2Zz4K", alt: "logo", style: { width: 38, height: 38, borderRadius: 10, boxShadow: "0 2px 8px rgba(0,0,0,0.2)", flexShrink: 0 } }), (0, o.jsxs)("div", { children: [(0, o.jsx)("div", { className: "app-title", style: { fontSize: 18, fontWeight: 900, whiteSpace: "nowrap", letterSpacing: "-0.5px" }, children: n("appName") }), (0, o.jsxs)("div", { className: "app-header-meta", style: { fontSize: 12, opacity: 0.7, marginTop: 2 }, children: [n("count_students", activeStudents.length), " · ", n("count_lessons", s.length)] })] })] }), (0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [(0, o.jsx)("div", { className: "app-lang-switch", style: { display: "flex", background: "rgba(255,255,255,0.15)", borderRadius: 20, padding: 2, gap: 1 }, children: ["ko", "en"].map((h) => (0, o.jsx)("button", { onClick: () => a(h), style: { padding: "4px 10px", borderRadius: 18, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "'Noto Sans KR', sans-serif", background: e === h ? "rgba(255,255,255,0.9)" : "transparent", color: e === h ? "#6366f1" : "rgba(255,255,255,0.8)", transition: "all 0.15s" }, children: h === "ko" ? "한국어" : "EN" }, h)) }), ki && (0, o.jsxs)("div", { className: "app-drive-pill", style: { textAlign: "right", background: "rgba(255,255,255,0.15)", borderRadius: 10, padding: "7px 11px" }, children: [(0, o.jsx)("div", { style: { fontSize: 10, opacity: 0.8 }, children: n("driveStatus") }), (0, o.jsx)("div", { style: { fontSize: 11, fontWeight: 700 }, children: (zc = De == null ? void 0 : De.email) == null ? void 0 : zc.split("@")[0] })] }), (0, o.jsxs)("div", { className: "app-menu-wrap", style: { position: "relative" }, children: [(0, o.jsx)("button", { onClick: () => Xe((h) => !h), style: { background: "rgba(255,255,255,0.18)", border: "none", color: "#fff", borderRadius: 10, width: 36, height: 36, fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }, children: "⋮" }), wt && (0, o.jsxs)(o.Fragment, { children: [(0, o.jsx)("div", { onClick: () => Xe(false), style: { position: "fixed", inset: 0, zIndex: 99 } }), (0, o.jsxs)("div", { className: "app-menu", style: { position: "absolute", right: 0, top: 42, borderRadius: 14, boxShadow: "0 8px 32px rgba(0,0,0,0.18)", zIndex: 100, minWidth: 180, overflow: "hidden" }, children: [(0, o.jsx)("a", { href: `mailto:limfrog75@gmail.com?subject=${n("appName")} feedback`, className: "app-menu-item", style: { display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", fontSize: 14, fontWeight: 700, textDecoration: "none", borderBottom: "1px solid var(--border)", fontFamily: "'Noto Sans KR', sans-serif" }, onClick: () => Xe(false), children: n("contactDev") }), (0, o.jsx)("a", { href: `mailto:limfrog75@gmail.com?subject=${n("appName")} bug report`, className: "app-menu-item", style: { display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", fontSize: 14, fontWeight: 700, textDecoration: "none", borderBottom: "1px solid var(--border)", fontFamily: "'Noto Sans KR', sans-serif" }, onClick: () => Xe(false), children: n("reportBug") }), (0, o.jsx)("div", { style: { padding: "14px 18px", fontSize: 12, fontFamily: "'Noto Sans KR', sans-serif", color: "var(--text-muted)" }, children: n("version", "2.2.17") })] })] })] })] })] }) }), (0, o.jsx)(h1, { isConnected: ki, tokenExpired: gc, auth: De, syncStatus: mc, syncMsg: pc, onManualSync: () => yc(u, s, q), onReLogin: () => vc(Pn) }), Di && (0, o.jsx)("div", { style: { position: "fixed", bottom: 90, left: "50%", transform: "translateX(-50%)", background: Di.startsWith("✅") ? "var(--green)" : Di.startsWith("⚠️") ? "#ef4444" : "#6366f1", color: "#fff", borderRadius: 14, padding: "12px 20px", fontSize: 13, fontWeight: 700, fontFamily: "'Noto Sans KR', sans-serif", boxShadow: "0 4px 20px rgba(0,0,0,0.25)", zIndex: 9998, maxWidth: "90vw", textAlign: "center", whiteSpace: "pre-line" }, children: Di }), (0, o.jsx)("div", { className: "app-tabbar", style: { display: "flex", position: "sticky", top: 0, zIndex: 10 }, children: n("tabs").map((h, E) => (0, o.jsx)("button", { onClick: () => {
+    return (0, o.jsx)(Bm.Provider, { value: e, children: (0, o.jsx)(mu.Provider, { value: { dark: Ci }, children: (0, o.jsxs)(o.Fragment, { children: [Kt && (0, o.jsx)(T1, { onUnlock: Ni }), (0, o.jsxs)("div", { className: "app-wrap", style: { fontFamily: "-apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif", maxWidth: ct ? void 0 : 540, margin: ct ? void 0 : "0 auto", filter: Kt ? "blur(8px) brightness(0.5)" : "none", pointerEvents: Kt ? "none" : "auto", userSelect: Kt ? "none" : "auto" }, children: [(0, o.jsx)("div", { className: "app-header", style: { padding: "max(16px, calc(env(safe-area-inset-top, 0px) + 12px)) 20px 18px", color: "#fff" }, children: (0, o.jsxs)("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" }, children: [(0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [ct && (0, o.jsx)("img", { src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIiB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJnR3JhZCIgeDE9IjAlIiB5MT0iMCUiIHgyPSIxMDAlIiB5Mj0iMTAwJSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiM2MzY2ZjEiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdHlsZT0ic3RvcC1jb2xvcjojOGI1Y2Y2Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJwYXBlckdyYWQiIHgxPSIwJSIgeTE9IjAlIiB4Mj0iMCUiIHkyPSIxMDAlIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwJSIgc3R5bGU9InN0b3AtY29sb3I6I2ZmZmZmZjtzdG9wLW9wYWNpdHk6MSIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEwMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiNmNWYzZmY7c3RvcC1vcGFjaXR5OjEiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8ZmlsdGVyIGlkPSJzaGFkb3ciIHg9Ii0xMCUiIHk9Ii0xMCUiIHdpZHRoPSIxMjAlIiBoZWlnaHQ9IjEzMCUiPgogICAgICA8ZmVEcm9wU2hhZG93IGR4PSIwIiBkeT0iOCIgc3RkRGV2aWF0aW9uPSIxMiIgZmxvb2QtY29sb3I9IiM0MzM4Y2EiIGZsb29kLW9wYWNpdHk9IjAuMzUiLz4KICAgIDwvZmlsdGVyPgogICAgPGZpbHRlciBpZD0ic29mdFNoYWRvdyIgeD0iLTUlIiB5PSItNSUiIHdpZHRoPSIxMTUlIiBoZWlnaHQ9IjEyMCUiPgogICAgICA8ZmVEcm9wU2hhZG93IGR4PSIwIiBkeT0iMyIgc3RkRGV2aWF0aW9uPSI1IiBmbG9vZC1jb2xvcj0iIzAwMCIgZmxvb2Qtb3BhY2l0eT0iMC4xMiIvPgogICAgPC9maWx0ZXI+CiAgICA8Y2xpcFBhdGggaWQ9InJvdW5kZWRDbGlwIj4KICAgICAgPHJlY3QgeD0iNTYiIHk9IjU2IiB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgcng9Ijk2IiByeT0iOTYiLz4KICAgIDwvY2xpcFBhdGg+CiAgPC9kZWZzPgogIDxyZWN0IHg9IjU2IiB5PSI1NiIgd2lkdGg9IjQwMCIgaGVpZ2h0PSI0MDAiIHJ4PSI5NiIgcnk9Ijk2IiBmaWxsPSJ1cmwoI2JnR3JhZCkiIGZpbHRlcj0idXJsKCNzaGFkb3cpIi8+CiAgPGNpcmNsZSBjeD0iNDIwIiBjeT0iMTMwIiByPSI4MCIgZmlsbD0id2hpdGUiIGZpbGwtb3BhY2l0eT0iMC4wNiIgY2xpcC1wYXRoPSJ1cmwoI3JvdW5kZWRDbGlwKSIvPgogIDxjaXJjbGUgY3g9IjEwMCIgY3k9IjM5MCIgcj0iMTAwIiBmaWxsPSJ3aGl0ZSIgZmlsbC1vcGFjaXR5PSIwLjA1IiBjbGlwLXBhdGg9InVybCgjcm91bmRlZENsaXApIi8+CiAgPHJlY3QgeD0iMTQ4IiB5PSIxMzYiIHdpZHRoPSIyMTYiIGhlaWdodD0iMjY0IiByeD0iMTQiIHJ5PSIxNCIgZmlsbD0idXJsKCNwYXBlckdyYWQpIiBmaWx0ZXI9InVybCgjc29mdFNoYWRvdykiLz4KICA8bGluZSB4MT0iMTg2IiB5MT0iMTUwIiB4Mj0iMTg2IiB5Mj0iMzg2IiBzdHJva2U9IiNmY2E1YTUiIHN0cm9rZS13aWR0aD0iMi41IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMTg4IiB4Mj0iMzQ4IiB5Mj0iMTg4IiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMjE0IiB4Mj0iMzQ4IiB5Mj0iMjE0IiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMjQwIiB4Mj0iMzQ4IiB5Mj0iMjQwIiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMjY2IiB4Mj0iMzQ4IiB5Mj0iMjY2IiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMjkyIiB4Mj0iMzQ4IiB5Mj0iMjkyIiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8bGluZSB4MT0iMTk2IiB5MT0iMzE4IiB4Mj0iMzQ4IiB5Mj0iMzE4IiBzdHJva2U9IiNlNWU3ZWIiIHN0cm9rZS13aWR0aD0iMS44IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8cmVjdCB4PSIxOTYiIHk9IjE3OCIgd2lkdGg9IjExMCIgaGVpZ2h0PSI4IiByeD0iNCIgZmlsbD0iIzYzNjZmMSIgb3BhY2l0eT0iMC44NSIvPgogIDxyZWN0IHg9IjE5NiIgeT0iMjA0IiB3aWR0aD0iMTQwIiBoZWlnaHQ9IjYiIHJ4PSIzIiBmaWxsPSIjOWNhM2FmIiBvcGFjaXR5PSIwLjciLz4KICA8cmVjdCB4PSIxOTYiIHk9IjIzMCIgd2lkdGg9IjEyMCIgaGVpZ2h0PSI2IiByeD0iMyIgZmlsbD0iIzljYTNhZiIgb3BhY2l0eT0iMC43Ii8+CiAgPHJlY3QgeD0iMTk2IiB5PSIyNTYiIHdpZHRoPSIxMzAiIGhlaWdodD0iNiIgcng9IjMiIGZpbGw9IiM5Y2EzYWYiIG9wYWNpdHk9IjAuNyIvPgogIDxyZWN0IHg9IjE5NiIgeT0iMjgyIiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjYiIHJ4PSIzIiBmaWxsPSIjOWNhM2FmIiBvcGFjaXR5PSIwLjciLz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyOTYsIDMwMCkiIGZpbHRlcj0idXJsKCNzb2Z0U2hhZG93KSI+CiAgICA8Y2lyY2xlIGN4PSIzNiIgY3k9IjM2IiByPSIzNiIgZmlsbD0iIzYzNjZmMSIvPgogICAgPGVsbGlwc2UgY3g9IjI4IiBjeT0iNDYiIHJ4PSI5IiByeT0iNyIgZmlsbD0id2hpdGUiIHRyYW5zZm9ybT0icm90YXRlKC0xNSwgMjgsIDQ2KSIvPgogICAgPHJlY3QgeD0iMzYiIHk9IjIwIiB3aWR0aD0iNCIgaGVpZ2h0PSIyOCIgcng9IjIiIGZpbGw9IndoaXRlIi8+CiAgICA8cGF0aCBkPSJNNDAgMjAgUTUyIDI2IDQ4IDM2IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjMuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgPC9nPgogIDxjaXJjbGUgY3g9IjIxNiIgY3k9IjE0OCIgcj0iNyIgZmlsbD0iI2U1ZTdlYiIvPgogIDxjaXJjbGUgY3g9IjI1NiIgY3k9IjE0OCIgcj0iNyIgZmlsbD0iI2U1ZTdlYiIvPgogIDxjaXJjbGUgY3g9IjI5NiIgY3k9IjE0OCIgcj0iNyIgZmlsbD0iI2U1ZTdlYiIvPgogIDxjaXJjbGUgY3g9IjIxNiIgY3k9IjE0OCIgcj0iNCIgZmlsbD0idXJsKCNiZ0dyYWQpIi8+CiAgPGNpcmNsZSBjeD0iMjU2IiBjeT0iMTQ4IiByPSI0IiBmaWxsPSJ1cmwoI2JnR3JhZCkiLz4KICA8Y2lyY2xlIGN4PSIyOTYiIGN5PSIxNDgiIHI9IjQiIGZpbGw9InVybCgjYmdHcmFkKSIvPgo8L3N2Zz4K", alt: "logo", style: { width: 38, height: 38, borderRadius: 10, boxShadow: "0 2px 8px rgba(0,0,0,0.2)", flexShrink: 0 } }), (0, o.jsxs)("div", { children: [(0, o.jsx)("div", { className: "app-title", style: { fontSize: 18, fontWeight: 900, whiteSpace: "nowrap", letterSpacing: "-0.5px" }, children: n("appName") }), (0, o.jsxs)("div", { className: "app-header-meta", style: { fontSize: 12, opacity: 0.7, marginTop: 2 }, children: [n("count_students", activeStudents.length), " · ", n("count_lessons", s.length)] })] })] }), (0, o.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [(0, o.jsx)("div", { className: "app-lang-switch", style: { display: "flex", background: "rgba(255,255,255,0.15)", borderRadius: 20, padding: 2, gap: 1 }, children: ["ko", "en"].map((h) => (0, o.jsx)("button", { onClick: () => a(h), style: { padding: "4px 10px", borderRadius: 18, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "'Noto Sans KR', sans-serif", background: e === h ? "rgba(255,255,255,0.9)" : "transparent", color: e === h ? "#6366f1" : "rgba(255,255,255,0.8)", transition: "all 0.15s" }, children: h === "ko" ? "한국어" : "EN" }, h)) }), ki && (0, o.jsxs)("div", { className: "app-drive-pill", style: { textAlign: "right", background: "rgba(255,255,255,0.15)", borderRadius: 10, padding: "7px 11px" }, children: [(0, o.jsx)("div", { style: { fontSize: 10, opacity: 0.8 }, children: n("driveStatus") }), (0, o.jsx)("div", { style: { fontSize: 11, fontWeight: 700 }, children: (zc = De == null ? void 0 : De.email) == null ? void 0 : zc.split("@")[0] })] }), (0, o.jsxs)("div", { className: "app-menu-wrap", style: { position: "relative" }, children: [(0, o.jsx)("button", { onClick: () => Xe((h) => !h), style: { background: "rgba(255,255,255,0.18)", border: "none", color: "#fff", borderRadius: 10, width: 36, height: 36, fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }, children: "⋮" }), wt && (0, o.jsxs)(o.Fragment, { children: [(0, o.jsx)("div", { onClick: () => Xe(false), style: { position: "fixed", inset: 0, zIndex: 99 } }), (0, o.jsxs)("div", { className: "app-menu", style: { position: "absolute", right: 0, top: 42, borderRadius: 14, boxShadow: "0 8px 32px rgba(0,0,0,0.18)", zIndex: 100, minWidth: 180, overflow: "hidden" }, children: [(0, o.jsx)("a", { href: `mailto:limfrog75@gmail.com?subject=${n("appName")} feedback`, className: "app-menu-item", style: { display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", fontSize: 14, fontWeight: 700, textDecoration: "none", borderBottom: "1px solid var(--border)", fontFamily: "'Noto Sans KR', sans-serif" }, onClick: () => Xe(false), children: n("contactDev") }), (0, o.jsx)("a", { href: `mailto:limfrog75@gmail.com?subject=${n("appName")} bug report`, className: "app-menu-item", style: { display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", fontSize: 14, fontWeight: 700, textDecoration: "none", borderBottom: "1px solid var(--border)", fontFamily: "'Noto Sans KR', sans-serif" }, onClick: () => Xe(false), children: n("reportBug") }), (0, o.jsx)("div", { style: { padding: "14px 18px", fontSize: 12, fontFamily: "'Noto Sans KR', sans-serif", color: "var(--text-muted)" }, children: n("version", "2.5.0") })] })] })] })] })] }) }), (0, o.jsx)(h1, { isConnected: ki, tokenExpired: gc, auth: De, syncStatus: mc, syncMsg: pc, onManualSync: () => yc(u, s, q), onReLogin: () => vc(Pn) }), Di && (0, o.jsx)("div", { style: { position: "fixed", bottom: 90, left: "50%", transform: "translateX(-50%)", background: Di.startsWith("✅") ? "var(--green)" : Di.startsWith("⚠️") ? "#ef4444" : "#6366f1", color: "#fff", borderRadius: 14, padding: "12px 20px", fontSize: 13, fontWeight: 700, fontFamily: "'Noto Sans KR', sans-serif", boxShadow: "0 4px 20px rgba(0,0,0,0.25)", zIndex: 9998, maxWidth: "90vw", textAlign: "center", whiteSpace: "pre-line" }, children: Di }), (0, o.jsx)("div", { className: "app-tabbar", style: { display: "flex", position: "sticky", top: 0, zIndex: 10 }, children: n("tabs").map((h, E) => (0, o.jsx)("button", { onClick: () => {
       i(E), x(null);
     }, className: `app-tab${l === E ? " active" : ""}`, style: { flex: 1, padding: "13px 4px", border: "none", background: "none", cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", fontSize: 12, fontWeight: l === E ? 800 : 600, transition: "all 0.2s" }, children: h }, E)) }), (0, o.jsxs)("div", { className: "app-body", children: [ct && (0, o.jsxs)("div", { className: "app-sidebar", children: [[{ i: 0, icon: "◉", label: n("tabs")[0] }, { i: 1, icon: "✎", label: n("tabs")[1] }, { i: 2, icon: "▦", label: n("tabs")[2] }, { i: 3, icon: "⚙", label: n("tabs")[3] }].map(({ i: h, icon: E, label: M }) => (0, o.jsxs)("button", { className: `app-sidebar-btn${l === h ? " active" : ""}`, onClick: () => {
       i(h), x(null);

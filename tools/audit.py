@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static stability audit for My Lesson Diary v2.2.17."""
+"""Static stability audit for My Lesson Diary v2.5.0."""
 from pathlib import Path
 import json, re, subprocess, shutil, sys
 
@@ -14,7 +14,7 @@ checks = []
 def check(name, ok, detail=''):
     checks.append((name, bool(ok), detail))
 
-check('app version 2.2.17', APP.count('\"2.2.17\"') >= 2)
+check('app version 2.5.0', APP.count('\"2.5.0\"') >= 2)
 check('schema version 3', bool(re.search(r'\bgu\s*=\s*3\b', APP)))
 check('no native confirm', 'window.confirm' not in APP)
 check('no native alert', not re.search(r'(?<![\w.])alert\s*\(', APP))
@@ -43,7 +43,7 @@ check('favicon 16 linked', 'href="./favicon-16x16.png"' in TPL)
 check('favicon 32 linked', 'href="./favicon-32x32.png"' in TPL)
 check('no embedded Base64 manifest', 'data:application/json;base64' not in TPL)
 check('no embedded Base64 head icons', 'data:image/png;base64' not in TPL[:TPL.find('</head>')])
-check('SW cache v2217', "CACHE_NAME = 'mylesson-v2217'" in SW)
+check('SW cache v250', "CACHE_NAME = 'mylesson-v250'" in SW)
 check('SW caches manifest', "'./manifest.webmanifest'" in SW)
 check('SW caches Apple icon', "'./apple-touch-icon.png'" in SW)
 check('manifest standalone', MANIFEST.get('display') == 'standalone')
@@ -77,6 +77,28 @@ check('calendar PDF MIME', all(x in APP for x in ['type: "application/pdf"','new
 check('calendar iOS PDF share path', all(x in APP for x in ['_calendarPrintDevice','navigator.share','navigator.canShare','new File([doc.blob]','iOS 공유 메뉴에서 ‘프린트’를 선택하세요.']))
 check('calendar desktop PDF preview', all(x in APP for x in ['_openCalendarPdf','URL.createObjectURL(doc.blob)','window.open(url, "_blank")']))
 check('calendar HTML share removed', 'text/html;charset=utf-8' not in APP and 'new File([doc.html]' not in APP)
+check('weekly PDF standard font weights', 'Math.round(7.2 * dpi / 72), 650)' not in APP and 'Math.round(9.0 * dpi / 72), 750)' not in APP)
+
+# v2.5.0 data-safety hardening
+check('recovery IndexedDB store', all(x in APP for x in ['_RECOVERY_DB = "mylesson_recovery_v1"','_RECOVERY_STORE = "snapshots"','_RECOVERY_LIMIT = 10','_recoveryDB','_saveRecoverySnapshot','_listRecoverySnapshots']))
+check('snapshot before whole-data replacement', 'before_cloud_replace' in APP and 'before_replace' in APP and 'if (!options.skipSnapshot) await _saveRecoverySnapshot' in APP)
+check('manual recovery UI', all(x in APP for x in ['데이터 안전','지금 복구본 만들기','restoreRecovery','recoveryItems.slice(0, 5)']))
+check('corrupt local data detection and recovery', all(x in APP for x in ['_localDataCorrupt = false','_readLocalArray','_latestRecoverySnapshot','손상된 로컬 데이터 대신 최근 안전 복구본을 복원했습니다.']))
+check('critical local writes are guarded', all(x in APP for x in ['_safeStoreJSON("students"','_safeStoreJSON("lessons"','_safeStoreJSON("student_folders"','local_storage_error']))
+check('persistent storage request and estimate', all(x in APP for x in ['navigator.storage.persisted','navigator.storage.persist','navigator.storage.estimate','_storageHealth(true)']))
+check('device and sync metadata', all(x in APP for x in ['_DEVICE_ID_KEY','_DATA_META_KEY','_deviceId()','_nextCloudMeta','syncMeta']))
+check('dirty data tracking', all(x in APP for x in ['_DATA_DIRTY_KEY','_setDataDirty(true)','_setDataDirty(false)','_isDataDirty()']))
+check('Drive conflict protection', all(x in APP for x in ['_CLOUD_SEEN_KEY','remoteMeta.updatedAt !== lastSeen','r("conflict")','_syncStatus("conflict"']))
+check('explicit force overwrite only', 'p(m, f, b, true)' in APP and 'F(k, C, K, false)' in APP)
+check('force overwrite preserves remote recovery', 'cloud_before_force_overwrite' in APP and 'students: remote.students' in APP)
+check('cloud loads mark seen and are snapshot-safe', APP.count('_markCloudSeen(') >= 4 and APP.count('{ source: "cloud" }') >= 3)
+check('new Drive file keeps current local data', 'students: [], lessons: [], folders: []' not in APP[APP.find('function p1'):APP.find('function sc')])
+check('Drive file contains revision metadata', 'syncMeta: initMeta' in APP and 'syncMeta }, _ = await Wn.writeFile' in APP)
+check('SW activation is not forced during install', "self.addEventListener('message'" in SW and "event.data.type === 'SKIP_WAITING'" in SW and 'cache.addAll(APP_SHELL)).catch' not in SW)
+check('SW cache write uses waitUntil', 'event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)))' in SW and 'event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(req, res.clone())))' in SW)
+check('privacy login scope wording corrected', '기본 기능은 로그인 없이 사용할 수 있으며' in (ROOT/'privacy.html').read_text(encoding='utf-8') and 'localStorage 및 IndexedDB' in (ROOT/'privacy.html').read_text(encoding='utf-8'))
+check('privacy dark mode and close preserved', all(x in (ROOT/'privacy.html').read_text(encoding='utf-8') for x in ['app_theme_dark','data-theme','닫기']))
+check('build version 2.5.0', 'v2.5.0 build' in BUILD and 'app version 2.5.0 missing' in BUILD)
 
 for fn in ['favicon.ico','favicon-16x16.png','favicon-32x32.png','apple-touch-icon.png','android-chrome-192x192.png','android-chrome-512x512.png','maskable-icon-512x512.png','icon-1024x1024.png','logo.png']:
     check('asset exists: '+fn, (ROOT/fn).exists())

@@ -1,5 +1,5 @@
-/* My Lesson Diary service worker v2.2.17 */
-const CACHE_NAME = 'mylesson-v2217';
+/* My Lesson Diary service worker v2.5.0 */
+const CACHE_NAME = 'mylesson-v250';
 const APP_SHELL = [
   './', './index.html', './privacy.html', './terms.html', './styles.css',
   './manifest.webmanifest', './favicon.ico', './favicon-16x16.png', './favicon-32x32.png',
@@ -8,12 +8,13 @@ const APP_SHELL = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
-      .catch(() => undefined)
-  );
-  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
+  // Do not skipWaiting automatically. Keeping the old worker alive until all
+  // existing tabs close prevents a running page from mixing old JS with a new cache.
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -38,7 +39,7 @@ self.addEventListener('fetch', (event) => {
         .then((res) => {
           if (res && res.ok) {
             const copy = res.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+            event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)));
           }
           return res;
         })
@@ -50,7 +51,9 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(req).then((cached) => {
       const fresh = fetch(req).then((res) => {
-        if (res && res.ok) caches.open(CACHE_NAME).then((cache) => cache.put(req, res.clone()));
+        if (res && res.ok) {
+          event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(req, res.clone())));
+        }
         return res;
       }).catch(() => cached);
       return cached || fresh;
